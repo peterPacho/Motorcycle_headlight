@@ -1,15 +1,12 @@
-﻿/*
-	Gyro portion is heavly based on Kristian Lauszus, TKJ Electronics work.
-*/
-
-#include <Wire.h>
+﻿#include <Wire.h>
 #include <TMCStepper.h>         // https://github.com/teemuatlut/TMCStepper
 #include <AccelStepper.h>		// https://github.com/teemuatlut/TMCStepper/blob/master/examples/TMC_AccelStepper/TMC_AccelStepper.ino
 #include <LiquidCrystal_I2C.h>
-#include "Kalman.h" // Source: https://github.com/TKJElectronics/KalmanFilter
+
+//#define debug //comment out to disable debug/serial commands
 
 /*
-	Arduino pin-out. SDA - A4, SCL - A5
+	Arduino pin-out. SDA (white) - A4, SCL (yellow) - A5
 */
 #define DRIVER_ENABLE 9
 #define DRIVER_DIRECTION 10
@@ -22,28 +19,26 @@
 #define BUTTON2 8
 #define BUTTON3 A1
 #define BUTTON4 A2
-#define LCD_BRIGHTNESS 11
+#define LCD_BRIGHTNESS 11 //must be a PWM pin
 #define VOLTAGE_SENSE A0
 
-int DRIVER_MAX_SPEED = 1200;
-int DRIVER_MAX_ACC = 2500;
-int DRIVER_CURRENT = 1500;
+int mode = -1; //used in main loop to turn on/off gyro function
 
-int DISPLAY_BRIGHTNESS = 100;
+int DRIVER_MAX_SPEED = 1200;	//in steps per second?
+int DRIVER_MAX_ACC = 2500;
+int DRIVER_CURRENT = 1500;		//in mA?
+int DISPLAY_BRIGHTNESS = 100;	//0-255
+int GYRO_UPDATE_TIME = 100;		//in ms, how often to read data from the gyro
 
 #define DRIVER_ADDRESS 0b00
 #define DRIVER_RSENSE 0.11f
 #define MPU 0x68
-
 
 /*
 	Speeds to use for calibration function.
 */
 #define DRIVER_MAX_SPEED_CALIBRATION 400
 #define DRIVER_MAX_ACC_CALIBRATION 300
-
-int MOVE_THRESHOLD = 5;			//how many steps off "correct" position before is starts moving
-int MOVE_THRESHOLD_CENTER = 35; //how many steps off center before it starts moving
 
 /*
 	With 72:8 gear ratio (9:1),
@@ -57,24 +52,13 @@ int MOVE_THRESHOLD_CENTER = 35; //how many steps off center before it starts mov
 #define STEPS_PER_REVOLUTION 1800 //used by the centering function
 #define STEPS_LIMIT 400	//How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
 int STEPS_LIMIT_ALLOWED = STEPS_LIMIT;
+int MOVE_THRESHOLD = 5;			//how many steps off "correct" position before is starts moving
+int MOVE_THRESHOLD_CENTER = 35; //how many steps off center before it starts moving
 
 SoftwareSerial SoftSerial( DRIVER_RX, DRIVER_TX );
 TMC2209Stepper TMCdriver( &SoftSerial, DRIVER_RSENSE, DRIVER_ADDRESS );
 AccelStepper stepper = AccelStepper( stepper.DRIVER, DRIVER_STEP, DRIVER_DIRECTION );
 LiquidCrystal_I2C lcd( 0x27, 16, 2 );
-
-Kalman kalmanX; // Create the Kalman instances
-Kalman kalmanY;
-
-/* IMU Data */
-double accX, accY, accZ;
-double gyroX;
-int16_t tempRaw;
-double gyroXangle, gyroYangle; // Angle calculate using the gyro only
-double kalAngleX, kalAngleY; // Calculated angle using a Kalman filter
-uint32_t timer;
-uint8_t i2cData[14]; // Buffer for I2C data
-
 
 //debouncing class for simple buttons, default for them is high (internal pull up)
 unsigned long lastButtonEvent;	//keeps time when was the button pressed last time
@@ -157,44 +141,113 @@ button buttonUp( BUTTON3 );
 button buttonDown( BUTTON1 );
 button buttonESC( BUTTON2 );
 
-int mode = -1; //used in main loop to turn on/off gyro function
 /*
 	Found this somewhere. Don't know who is the original author.
 */
-//void findDevices()
-//{
-//	byte err, adr;       /*variable error is defined with address of I2C*/
-//	int number_of_devices;
-//	Serial.println( "Scanning." );
-//	number_of_devices = 0;
-//	for (adr = 1; adr < 127; adr++)
-//	{
-//		Wire.beginTransmission( adr );
-//		err = Wire.endTransmission();
-//
-//		if (err == 0)
-//		{
-//			Serial.print( "I2C device at address 0x" );
-//			if (adr < 16)
-//				Serial.print( "0" );
-//			Serial.print( adr, HEX );
-//			Serial.println( "  !" );
-//			number_of_devices++;
-//		}
-//		else if (err == 4)
-//		{
-//			Serial.print( "Unknown error at address 0x" );
-//			if (adr < 16)
-//				Serial.print( "0" );
-//			Serial.println( adr, HEX );
-//		}
-//	}
-//	if (number_of_devices == 0)
-//		Serial.println( "No I2C devices attached\n" );
-//	else
-//		Serial.println( "done\n" );
-//}
+#ifdef debug
+void findDevices()
+{
+	byte err, adr;
+	byte number_of_devices;
+	Serial.println( F("Scanning...") );
+	number_of_devices = 0;
+	for (adr = 1; adr < 127; adr++)
+	{
+		Wire.beginTransmission( adr );
+		err = Wire.endTransmission();
 
+		if (err == 0)
+		{
+			Serial.print( F("I2C device at address 0x") );
+			if (adr < 16)
+				Serial.print( F("0") );
+			Serial.println( adr, HEX );
+			number_of_devices++;
+		}
+		else if (err == 4)
+		{
+			Serial.print( F("Unknown error at address 0x") );
+			if (adr < 16)
+				Serial.print( F("0") );
+			Serial.println( adr, HEX );
+		}
+	}
+	if (number_of_devices == 0)
+		Serial.println( F("No I2C devices attached\n") );
+	else
+		Serial.println( F("...done\n") );
+}
+
+
+/*
+	Processes the serial commands
+*/
+void serialCommands()
+{
+	if (Serial.available())
+	{
+		String data = Serial.readString();
+
+		switch (data.charAt( 0 ))
+		{
+		case 's':
+		{
+			int speed = data.substring( 1 ).toInt();
+
+			if (speed == 0)
+			{
+				stepper.disableOutputs();
+				Serial.println( F("Stepper disabled") );
+			}
+			else
+			{
+				Serial.print( F( "Speed set to ") );
+				Serial.println( speed );
+				stepper.enableOutputs();
+				stepper.setMaxSpeed( speed );
+			}
+			break;
+		}
+
+		case 'p':
+		{
+			int position = data.substring( 1 ).toInt();
+			Serial.print( F( "Moving stepper to position ") );
+			Serial.println( position );
+			stepper.moveTo( position );
+			break;
+		}
+
+		case 'a':
+		{
+			int speed = data.substring( 1 ).toInt();
+
+			Serial.print( F( "Acceleration set to ") );
+			Serial.println( speed );
+			stepper.enableOutputs();
+			stepper.setAcceleration( speed );
+			break;
+		}
+
+		case 'c':
+		{
+			calibratePosition();
+			break;
+		}
+		case 'd':
+		{
+			Serial.println( F( "Stepper disabled.") );
+			stepper.disableOutputs();
+			break;
+		}
+
+		default:
+			Serial.println( F( "Unknown command!") );
+		}
+	}
+}
+
+#endif
 
 /*
 	Finds the center / calibrates the stepper
@@ -203,11 +256,12 @@ int mode = -1; //used in main loop to turn on/off gyro function
 void calibratePosition()
 {
 	//setup
+	int direction = 1;
 	lcd.clear();
 	lcd.setCursor( 0, 0 );
 	lcd.print( F( "Calibrating" ) );
-	lcd.setCursor( 0, 1 );
-	lcd.print( F( "   position..." ) );
+	lcd.setCursor( 4, 1 );
+	lcd.print( F( "position..." ) );
 	if (digitalRead( DRIVER_ENABLE ))
 	{
 		stepper.enableOutputs();
@@ -218,6 +272,7 @@ void calibratePosition()
 
 
 	//if already calibrated before, move to 0 to reduce time
+	//if just started or already on 0 this function returns 0
 	if (stepper.currentPosition())
 	{
 		stepper.moveTo( 0 );
@@ -228,6 +283,7 @@ void calibratePosition()
 		while (stepper.distanceToGo()) stepper.run();
 	}
 
+	//arbitrary multiplier - want to move not more than less than 45 degrees
 	stepper.move( -STEPS_PER_REVOLUTION * 0.22 );
 
 	while (stepper.distanceToGo() != 0 && digitalRead( HALL_SENSOR ))
@@ -240,6 +296,8 @@ void calibratePosition()
 	//	if hall still reads high, we must be past it (and stalled on the end stop), so rotate back to the middle
 	if (digitalRead( HALL_SENSOR ))
 	{
+		direction = -1; //set so next steps of finding the center accelerate in the same direction
+
 		stepper.move( STEPS_PER_REVOLUTION * 0.22 );
 
 		while (stepper.distanceToGo() != 0 && digitalRead( HALL_SENSOR ))
@@ -256,7 +314,8 @@ void calibratePosition()
 	stepper.setMaxSpeed( DRIVER_MAX_SPEED_CALIBRATION / 4 );
 	stepper.setAcceleration( DRIVER_MAX_ACC_CALIBRATION / 2 );
 
-	stepper.move( -STEPS_PER_REVOLUTION * 0.04 );
+	//again arbitrary multiplier - too small and we don't reach other side of the magnet
+	stepper.move( -STEPS_PER_REVOLUTION * 0.04 * direction);
 
 	while (stepper.distanceToGo() != 0 && !digitalRead( HALL_SENSOR ))
 	{
@@ -268,7 +327,7 @@ void calibratePosition()
 	//move in other direction until hall reads 0 and then reads 1 again
 
 	stepper.setCurrentPosition( 0 );
-	stepper.move( STEPS_PER_REVOLUTION * 0.04 );
+	stepper.move( STEPS_PER_REVOLUTION * 0.04 * direction );
 
 	while (stepper.distanceToGo() != 0 && digitalRead( HALL_SENSOR ))
 	{
@@ -289,7 +348,6 @@ void calibratePosition()
 	//now we are in the actual middle position
 	stepper.setCurrentPosition( 0 );
 
-
 	//go back to the previous settings
 	stepper.setMaxSpeed( DRIVER_MAX_SPEED );
 	stepper.setAcceleration( DRIVER_MAX_ACC );
@@ -297,188 +355,27 @@ void calibratePosition()
 }
 
 /*
-	Those values were obtained by gathering data on different voltage levels and fitting
-	the linear curve fit in LoggerPro. More accurate than calculating from resistor's values used.
+	Those values were obtained by gathering data on different voltage levels and doing
+	the linear curve fit in LoggerPro. More accurate than calculating from resistor's values used and requires less brain power.
 */
-float voltMeter()
-{
-	return (float) analogRead( VOLTAGE_SENSE ) * 0.02764 + 0.07088;
-}
-
-//void serialCommands()
-//{
-//	if (Serial.available())
-//	{
-//		String data = Serial.readString();
-//
-//		switch (data.charAt( 0 ))
-//		{
-//		case 's':
-//		{
-//			int speed = data.substring( 1 ).toInt();
-//
-//			if (speed == 0)
-//			{
-//				stepper.disableOutputs();
-//				Serial.println( "Stepper disabled" );
-//			}
-//			else
-//			{
-//				Serial.print( "Speed set to " );
-//				Serial.println( speed );
-//				stepper.enableOutputs();
-//				stepper.setMaxSpeed( speed );
-//			}
-//			break;
-//		}
-//
-//		case 'p':
-//		{
-//			int position = data.substring( 1 ).toInt();
-//			Serial.print( "Moving stepper to position " );
-//			Serial.println( position );
-//			stepper.moveTo( position );
-//			break;
-//		}
-//
-//		case 'a':
-//		{
-//			int speed = data.substring( 1 ).toInt();
-//
-//			Serial.print( "Acceleration set to " );
-//			Serial.println( speed );
-//			stepper.enableOutputs();
-//			stepper.setAcceleration( speed );
-//			break;
-//		}
-//
-//		case 'c':
-//		{
-//			calibratePosition();
-//			break;
-//		}
-//		case 'd':
-//		{
-//			Serial.println( "Stepper disabled." );
-//			stepper.disableOutputs();
-//			break;
-//		}
-//
-//		default:
-//			Serial.println( "Unknown command!" );
-//		}
-//	}
-//}
+float voltMeter() {	return (float) analogRead( VOLTAGE_SENSE ) * 0.02764 + 0.07088; }
 
 /*
-	More of Kristian Lauszus code.
+	Returns the angle from the gyro. In degrees off center.
 */
-const uint8_t IMUAddress = 0x68; // AD0 is logic low on the PCB
-const uint16_t I2C_TIMEOUT = 1000; // Used to check for errors in I2C communication
-uint8_t i2cWrite( uint8_t registerAddress, uint8_t data, bool sendStop )
-{
-	return i2cWrite( registerAddress, &data, 1, sendStop ); // Returns 0 on success
-}
-uint8_t i2cWrite( uint8_t registerAddress, uint8_t* data, uint8_t length, bool sendStop )
-{
-	Wire.beginTransmission( IMUAddress );
-	Wire.write( registerAddress );
-	Wire.write( data, length );
-	uint8_t rcode = Wire.endTransmission( sendStop ); // Returns 0 on success
-	if (rcode)
-	{
-		Serial.print( F( "i2cWrite failed: " ) );
-		Serial.println( rcode );
-	}
-	return rcode; // See: http://arduino.cc/en/Reference/WireEndTransmission
-}
-uint8_t i2cRead( uint8_t registerAddress, uint8_t* data, uint8_t nbytes )
-{
-	uint32_t timeOutTimer;
-	Wire.beginTransmission( IMUAddress );
-	Wire.write( registerAddress );
-	uint8_t rcode = Wire.endTransmission( false ); // Don't release the bus
-	if (rcode)
-	{
-		Serial.print( F( "i2cRead failed: " ) );
-		Serial.println( rcode );
-		return rcode; // See: http://arduino.cc/en/Reference/WireEndTransmission
-	}
-	Wire.requestFrom( IMUAddress, nbytes, (uint8_t) true ); // Send a repeated start and then release the bus after reading
-	for (uint8_t i = 0; i < nbytes; i++)
-	{
-		if (Wire.available())
-			data[i] = Wire.read();
-		else
-		{
-			timeOutTimer = micros();
-			while (((micros() - timeOutTimer) < I2C_TIMEOUT) && !Wire.available());
-			if (Wire.available())
-				data[i] = Wire.read();
-			else
-			{
-				Serial.println( F( "i2cRead timeout" ) );
-				return 5; // This error value is not already taken by endTransmission
-			}
-		}
-	}
-	return 0; // Success
-}
-
-
-/*
-	Kristian Lauszus work
-*/
-
 double readSensorData()
 {
-	while (i2cRead( 0x3B, i2cData, 10 ));
-	accX = ((i2cData[0] << 8) | i2cData[1]);
-	accY = ((i2cData[2] << 8) | i2cData[3]);
-	accZ = ((i2cData[4] << 8) | i2cData[5]);
-	tempRaw = (i2cData[6] << 8) | i2cData[7];
-	gyroX = (i2cData[8] << 8) | i2cData[9];
-
-	double dt = (double) (micros() - timer) / 1000000; // Calculate delta time
-	timer = micros();
-
-	// Source: http://www.freescale.com/files/sensors/doc/app_note/AN3461.pdf eq. 25 and eq. 26
-	// atan2 outputs the value of -π to π (radians) - see http://en.wikipedia.org/wiki/Atan2
-	// It is then converted from radians to degrees
-	double roll = atan2( accY, accZ ) * RAD_TO_DEG;
-	double pitch = atan( -accX / sqrt( accY * accY + accZ * accZ ) ) * RAD_TO_DEG;
-
-	double gyroXrate = gyroX / 131.0; // Convert to deg/s
-	// This fixes the transition problem when the accelerometer angle jumps between -180 and 180 degrees
-	if ((roll < -90 && kalAngleX > 90) || (roll > 90 && kalAngleX < -90))
-	{
-		kalmanX.setAngle( roll );
-		kalAngleX = roll;
-		gyroXangle = roll;
-	}
-	else
-		kalAngleX = kalmanX.getAngle( roll, gyroXrate, dt ); // Calculate the angle using a Kalman filter
-
-	gyroXangle += gyroXrate * dt; // Calculate gyro angle without any filter
-
-	// Reset the gyro angle when it has drifted too much
-	if (gyroXangle < -180 || gyroXangle > 180)
-		gyroXangle = kalAngleX;
-
-	return kalAngleX;
+	return 0;
 }
 
 
 void setup()
 {
+#ifdef debug
 	Serial.begin( 9600 );
+#endif
 	SoftSerial.begin( 9600 );
 	TMCdriver.beginSerial( 9600 );
-
-	/*
-		https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6000-Register-Map1.pdf
-	*/
-	Wire.begin();
 
 	digitalWrite( DRIVER_ENABLE, HIGH );
 	pinMode( DRIVER_ENABLE, OUTPUT );
@@ -497,65 +394,30 @@ void setup()
 	stepper.setPinsInverted( false, false, true );
 	stepper.disableOutputs();
 
-	lcd.begin();
 	lcd.noBacklight(); //as brightness is controlled by arduino
+	lcd.begin();
 	analogWrite( LCD_BRIGHTNESS, DISPLAY_BRIGHTNESS );
 	lcd.clear();
-
-	/*
-		Setup copied from Kristian Lauszus's work.
-	*/
-	TWBR = ((F_CPU / 400000L) - 16) / 2; // Set I2C frequency to 400kHz
-
-	i2cData[0] = 7; // Set the sample rate to 1000Hz - 8kHz/(7+1) = 1000Hz
-	i2cData[1] = 0x00; // Disable FSYNC and set 260 Hz Acc filtering, 256 Hz Gyro filtering, 8 KHz sampling
-	i2cData[2] = 0x00; // Set Gyro Full Scale Range to ±250deg/s
-	i2cData[3] = 0x00; // Set Accelerometer Full Scale Range to ±2g
-	while (i2cWrite( 0x19, i2cData, 4, false )); // Write to all four registers at once
-	while (i2cWrite( 0x6B, 0x01, true )); // PLL with X axis gyroscope reference and disable sleep mode
-
-	while (i2cRead( 0x75, i2cData, 1 ));
-	if (i2cData[0] != 0x68)
-	{ // Read "WHO_AM_I" register
-		Serial.print( F( "Error reading sensor" ) );
-		while (1);
-	}
-
-	delay( 100 ); // Wait for sensor to stabilize
-
-	/* Set kalman and gyro starting angle */
-	while (i2cRead( 0x3B, i2cData, 6 ));
-	accX = (i2cData[0] << 8) | i2cData[1];
-	accY = (i2cData[2] << 8) | i2cData[3];
-	accZ = (i2cData[4] << 8) | i2cData[5];
-
-	// Source: http://www.freescale.com/files/sensors/doc/app_note/AN3461.pdf eq. 25 and eq. 26
-	// atan2 outputs the value of -π to π (radians) - see http://en.wikipedia.org/wiki/Atan2
-	// It is then converted from radians to degrees
-	double roll = atan2( accY, accZ ) * RAD_TO_DEG;
-	double pitch = atan( -accX / sqrt( accY * accY + accZ * accZ ) ) * RAD_TO_DEG;
-
-
-	kalmanX.setAngle( roll ); // Set starting angle
-	kalmanY.setAngle( pitch );
-	gyroXangle = roll;
-	gyroYangle = pitch;
-
-	timer = micros();
 }
 
 
 
 /*
-	Used to set numberical setting values.
-	startValue - if ESC pressed this is returned (so value is not changed)
-	setValue - what is displayed and what will be returned if OK is pressed.
+	Used to set numerical setting values.
+
+	Input:
+		- startValue - current setting/value
+		- min, max - allowed range for that setting
+		- multiplier - how much value should change per single button event
+
+	Returns:
+		- if ESC button pressed - original/unchanged startValue
+		- if OK pressed - currently set/displayed value
 */
-int menuInner( int startValue, int min, int max, int y )
+int menuInner( int startValue, int min, int max, int y, int multiplier = 1 )
 {
 	int setValue = startValue;
 	int displayedValue = startValue + 1; //to make sure display updates this time
-
 
 	//figure out maximum number of characters needed to display the value
 	int maxLength = String( max ).length();
@@ -583,12 +445,12 @@ int menuInner( int startValue, int min, int max, int y )
 
 		if (buttonUp.state())
 		{
-			setValue++;
+			setValue += multiplier;
 			if (setValue > max) setValue = max;
 		}
 		else if (buttonDown.state())
 		{
-			setValue--;
+			setValue -= multiplier;
 			if (setValue < min) setValue = min;
 		}
 		else if (buttonESC.state())
@@ -609,7 +471,7 @@ int menuInner( int startValue, int min, int max, int y )
 void menu()
 {
 	int menuCurrentItem = 0;
-	const int menuItemsCount = 7;
+	const int menuItemsCount = 7; //increase when adding menu options
 	bool displayUpdate = true;
 
 
@@ -621,7 +483,7 @@ void menu()
 			lcd.setCursor( 3, 0 );
 			int counter = 0;
 
-			//max string length = 13
+			//max string length = 13 because we also need 2 fields to print the arrow
 			if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
 				lcd.print( F( "Calibrate" ) );
@@ -636,7 +498,7 @@ void menu()
 			}
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.print( F( "Driver Amp" ) );
+				lcd.print( F( "Driver Amps" ) );
 				lcd.setCursor( 3, 1 );
 				lcd.print( F( "Move thr." ) );
 			}
@@ -673,7 +535,7 @@ void menu()
 		{
 			lcd.clear();
 			lcd.setCursor( 0, 0 );
-			displayUpdate = true;
+			displayUpdate = true; //so display updates when we exit the sub-menu
 
 			if (menuCurrentItem == 0)
 			{
@@ -729,30 +591,36 @@ void menu()
 			else if (menuCurrentItem == 2)
 			{
 				lcd.print( F( "Max speed" ) );
-				DRIVER_MAX_SPEED = menuInner( DRIVER_MAX_SPEED, 0, 4000, 1 );
+				DRIVER_MAX_SPEED = menuInner( DRIVER_MAX_SPEED, 0, 4000, 1, 10 );
 				stepper.setMaxSpeed( DRIVER_MAX_SPEED );
+#ifdef debug
 				Serial.print( F( "Max speed set to " ) );
 				Serial.println( DRIVER_MAX_SPEED );
+#endif
 				continue;
 
 			}
 			else if (menuCurrentItem == 3)
 			{
 				lcd.print( F( "Acceleration" ) );
-				DRIVER_MAX_ACC = menuInner( DRIVER_MAX_ACC, 0, 4000, 1 );
+				DRIVER_MAX_ACC = menuInner( DRIVER_MAX_ACC, 0, 4000, 1, 10 );
 				stepper.setAcceleration( DRIVER_MAX_ACC );
+#ifdef debug
 				Serial.print( F( "Max acceleration set to " ) );
 				Serial.println( DRIVER_MAX_ACC );
+#endif
 				continue;
 
 			}
 			else if (menuCurrentItem == 4)
 			{
 				lcd.print( F( "Driver current" ) );
-				DRIVER_CURRENT = menuInner( DRIVER_CURRENT, 0, 2000, 1 );
+				DRIVER_CURRENT = menuInner( DRIVER_CURRENT, 0, 2000, 1, 10 );
 				TMCdriver.rms_current( DRIVER_CURRENT );
+#ifdef debug
 				Serial.print( F( "Driver current set to " ) );
 				Serial.println( DRIVER_CURRENT );
+#endif
 				continue;
 
 			}
@@ -760,8 +628,10 @@ void menu()
 			{
 				lcd.print( F( "Move threshold" ) );
 				MOVE_THRESHOLD = menuInner( MOVE_THRESHOLD, 0, STEPS_LIMIT, 1 );
+#ifdef debug
 				Serial.print( F( "Move threshold set to " ) );
 				Serial.println( MOVE_THRESHOLD );
+#endif
 				continue;
 
 			}
@@ -769,22 +639,30 @@ void menu()
 			{
 				lcd.print( F( "Center thr." ) );
 				MOVE_THRESHOLD_CENTER = menuInner( MOVE_THRESHOLD_CENTER, 0, STEPS_LIMIT, 1 );
+#ifdef debug
 				Serial.print( F( "Move from center threshold set to " ) );
 				Serial.println( MOVE_THRESHOLD_CENTER );
+#endif
 				continue;
 			}
 			else if (menuCurrentItem == 7)
 			{
 				lcd.print( F( "Rotation limit" ) );
 				STEPS_LIMIT_ALLOWED = menuInner( STEPS_LIMIT_ALLOWED, 0, STEPS_LIMIT, 1 );
+#ifdef debug
 				Serial.print( F( "Steps limit set to " ) );
 				Serial.println( STEPS_LIMIT_ALLOWED );
+#endif
 				continue;
 			}
 			else
 			{
-				Serial.println( F( "Trying to enter unknown menu item." ) );
-				continue;
+#ifdef debug
+				Serial.println( F( "Trying to enter unknown menu item !" ) );
+#endif
+				//restart menu
+				menu();
+				return;
 			}
 
 			displayUpdate = 1;
@@ -808,16 +686,9 @@ void loop()
 	/*
 		Update the gyro value.
 	*/
-	if (millis() - gyroUpdate > 100)
+	if (millis() - gyroUpdate > GYRO_UPDATE_TIME)
 	{
 		gyroVal = readSensorData();
-
-		if (gyroVal > 0)
-			gyroVal -= 180;
-		else
-			gyroVal += 180;
-
-
 		gyroUpdate = millis();
 	}
 
@@ -850,6 +721,8 @@ void loop()
 
 	/*
 		Check for user input.
+		Only very important button checks here as it's possibly
+		done when stepper driver is running.
 	*/
 	switch (buttonOK.state())
 	{
@@ -870,19 +743,22 @@ void loop()
 			}
 		}
 		break;
-	case 2:
+	case 2: //if button is held down
+		int modeSave = mode;
 		calibratePosition();
-		mode = 1;
+		mode = modeSave;
 		break;
 	}
 
 	//if stepper not in target position don't run rest of the function.
+	//less important parts after this step
 	if (stepper.distanceToGo())
 	{
 		return;
 	}
 
 	//allow to go to the menu only if gyro is not running
+	//as if gyro is running we don't reach this part of the program
 	if (buttonESC.state())
 	{
 		//if we were calibrated and possibly running, go back to the center before entering the menu
