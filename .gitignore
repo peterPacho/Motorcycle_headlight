@@ -361,3 +361,7 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+/Motorcycle headlight/Motorcycle headlight.vcxproj
+/Motorcycle headlight/Motorcycle headlight.vcxproj.filters
+/Motorcycle headlight/__vm/Compile.vmps.xml
+/Motorcycle headlight/__vm/Upload.vmps.xml
