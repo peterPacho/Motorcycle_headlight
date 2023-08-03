@@ -3,7 +3,7 @@
 #include <AccelStepper.h>		// https://github.com/teemuatlut/TMCStepper/blob/master/examples/TMC_AccelStepper/TMC_AccelStepper.ino
 #include <LiquidCrystal_I2C.h>
 
-//#define debug //comment out to disable debug/serial commands
+#define debug //comment out to disable debug/serial commands
 
 /*
 	Arduino pin-out. SDA (white) - A4, SCL (yellow) - A5
@@ -141,41 +141,49 @@ button buttonUp( BUTTON3 );
 button buttonDown( BUTTON1 );
 button buttonESC( BUTTON2 );
 
-/*
-	Found this somewhere. Don't know who is the original author.
-*/
+
 #ifdef debug
+
+/*
+	Taken from https://learn.adafruit.com/scanning-i2c-addresses/arduino
+*/
 void findDevices()
 {
-	byte err, adr;
-	byte number_of_devices;
-	Serial.println( F("Scanning...") );
-	number_of_devices = 0;
-	for (adr = 1; adr < 127; adr++)
-	{
-		Wire.beginTransmission( adr );
-		err = Wire.endTransmission();
+	byte error, address;
+	int nDevices;
 
-		if (err == 0)
+	Serial.println( F("Scanning...") );
+
+	nDevices = 0;
+	for (address = 1; address < 127; address++)
+	{
+		// The i2c_scanner uses the return value of
+		// the Write.endTransmisstion to see if
+		// a device did acknowledge to the address.
+		Wire.beginTransmission( address );
+		error = Wire.endTransmission();
+
+		if (error == 0)
 		{
-			Serial.print( F("I2C device at address 0x") );
-			if (adr < 16)
+			Serial.print( F("I2C device found at address 0x") );
+			if (address < 16)
 				Serial.print( F("0") );
-			Serial.println( adr, HEX );
-			number_of_devices++;
+			Serial.println( address, HEX );
+
+			nDevices++;
 		}
-		else if (err == 4)
+		else if (error == 4)
 		{
 			Serial.print( F("Unknown error at address 0x") );
-			if (adr < 16)
+			if (address < 16)
 				Serial.print( F("0") );
-			Serial.println( adr, HEX );
+			Serial.println( address, HEX );
 		}
 	}
-	if (number_of_devices == 0)
-		Serial.println( F("No I2C devices attached\n") );
+	if (nDevices == 0)
+		Serial.println( F("No I2C devices found\n") );
 	else
-		Serial.println( F("...done\n") );
+		Serial.println( F("done\n") );
 }
 
 
@@ -371,11 +379,15 @@ double readSensorData()
 
 void setup()
 {
+	int set = 0;
 #ifdef debug
 	Serial.begin( 9600 );
+	Serial.print( F("Setup begin...  ") );
 #endif
 	SoftSerial.begin( 9600 );
 	TMCdriver.beginSerial( 9600 );
+
+	Wire.begin();
 
 	digitalWrite( DRIVER_ENABLE, HIGH );
 	pinMode( DRIVER_ENABLE, OUTPUT );
@@ -394,10 +406,16 @@ void setup()
 	stepper.setPinsInverted( false, false, true );
 	stepper.disableOutputs();
 
-	lcd.noBacklight(); //as brightness is controlled by arduino
 	lcd.begin();
+	lcd.noBacklight(); //as brightness is controlled by arduino
 	analogWrite( LCD_BRIGHTNESS, DISPLAY_BRIGHTNESS );
 	lcd.clear();
+
+	//findDevices();
+
+#ifdef debug
+	Serial.println( F(" done.") );
+#endif
 }
 
 
