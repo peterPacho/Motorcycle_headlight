@@ -2,8 +2,11 @@
 #include <TMCStepper.h>         // https://github.com/teemuatlut/TMCStepper
 #include <AccelStepper.h>		// https://github.com/teemuatlut/TMCStepper/blob/master/examples/TMC_AccelStepper/TMC_AccelStepper.ino
 #include <LiquidCrystal_I2C.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BNO055.h>
+#include <utility/imumaths.h>
 
-#define debug //comment out to disable debug/serial commands
+//#define debug //comment out to disable debug/serial commands
 
 /*
 	Arduino pin-out. SDA (white) - A4, SCL (yellow) - A5
@@ -29,6 +32,7 @@ int DRIVER_MAX_ACC = 2500;
 int DRIVER_CURRENT = 1500;		//in mA?
 int DISPLAY_BRIGHTNESS = 100;	//0-255
 int GYRO_UPDATE_TIME = 100;		//in ms, how often to read data from the gyro
+float POSITION_OFFSET = 0;		//used to calibrate the gyro position
 
 #define DRIVER_ADDRESS 0b00
 #define DRIVER_RSENSE 0.11f
@@ -59,6 +63,7 @@ SoftwareSerial SoftSerial( DRIVER_RX, DRIVER_TX );
 TMC2209Stepper TMCdriver( &SoftSerial, DRIVER_RSENSE, DRIVER_ADDRESS );
 AccelStepper stepper = AccelStepper( stepper.DRIVER, DRIVER_STEP, DRIVER_DIRECTION );
 LiquidCrystal_I2C lcd( 0x27, 16, 2 );
+Adafruit_BNO055 bno = Adafruit_BNO055( 55, 0x28, &Wire );
 
 //debouncing class for simple buttons, default for them is high (internal pull up)
 unsigned long lastButtonEvent;	//keeps time when was the button pressed last time
@@ -373,7 +378,10 @@ float voltMeter() {	return (float) analogRead( VOLTAGE_SENSE ) * 0.02764 + 0.070
 */
 double readSensorData()
 {
-	return 0;
+	sensors_event_t orientationData;
+	bno.getEvent( &orientationData, Adafruit_BNO055::VECTOR_EULER );
+
+	return orientationData.orientation.y - POSITION_OFFSET;
 }
 
 
@@ -410,6 +418,11 @@ void setup()
 	lcd.noBacklight(); //as brightness is controlled by arduino
 	analogWrite( LCD_BRIGHTNESS, DISPLAY_BRIGHTNESS );
 	lcd.clear();
+
+	if (!bno.begin())
+	{
+		digitalWrite( 13, HIGH );
+	}
 
 	//findDevices();
 
@@ -489,7 +502,7 @@ int menuInner( int startValue, int min, int max, int y, int multiplier = 1 )
 void menu()
 {
 	int menuCurrentItem = 0;
-	const int menuItemsCount = 7; //increase when adding menu options
+	const int menuItemsCount = 8; //increase when adding menu options
 	bool displayUpdate = true;
 
 
@@ -504,9 +517,9 @@ void menu()
 			//max string length = 13 because we also need 2 fields to print the arrow
 			if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.print( F( "Calibrate" ) );
+				lcd.print( F( "Calib. light" ) );
 				lcd.setCursor( 3, 1 );
-				lcd.print( F( "Brightness" ) );
+				lcd.print( F( "Calib. gyro" ) );
 			}
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
@@ -525,6 +538,12 @@ void menu()
 				lcd.print( F( "Center thr." ) );
 				lcd.setCursor( 3, 1 );
 				lcd.print( F( "Steps limit" ) );
+			}
+			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
+			{
+				lcd.print( F( "Brightness" ) );
+				//lcd.setCursor( 3, 1 );
+				//lcd.print( F( "Steps limit" ) );
 			}
 
 			//print selection arrow
@@ -562,6 +581,29 @@ void menu()
 				return;
 			}
 			else if (menuCurrentItem == 1)
+			{
+				lcd.print( F( "Gyro: " ) );
+				lcd.setCursor( 0, 1 );
+				lcd.print( F( "OK to reset" ) );
+
+				while (1)
+				{
+					lcd.setCursor( 8, 0 );
+					double gyroData = readSensorData();
+					lcd.print( gyroData );
+
+
+					if (buttonOK.state() == 1)
+					{
+						POSITION_OFFSET = gyroData;
+					}
+					else if (buttonESC.state())
+					{
+						break;
+					}
+				}
+			}
+			else if (menuCurrentItem == 8)
 			{
 				//could use manuInner function but I want the brightness to update as
 				//I change it.
