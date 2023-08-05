@@ -28,14 +28,6 @@
 
 int mode = -1; //used in main loop to turn on/off gyro function
 
-int DRIVER_MAX_SPEED = 1200;	//in steps per second?
-int DRIVER_MAX_ACC = 2000;
-int DRIVER_CURRENT = 1600;		//in mA?
-int DISPLAY_BRIGHTNESS = 50;	//0-255
-int GYRO_UPDATE_TIME = 25;		//in ms, how often to read data from the gyro
-float POSITION_OFFSET = -7;		//used to calibrate the center gyro position
-bool AUTO_POSITION_OFFSET = false;
-
 #define DRIVER_ADDRESS 0b00
 #define DRIVER_RSENSE 0.11f
 #define MPU 0x68
@@ -43,8 +35,8 @@ bool AUTO_POSITION_OFFSET = false;
 /*
 	Speeds to use for calibration function.
 */
-#define DRIVER_MAX_SPEED_CALIBRATION 400
-#define DRIVER_MAX_ACC_CALIBRATION 300
+#define DRIVER_MAX_SPEED_CALIBRATION 500
+#define DRIVER_MAX_ACC_CALIBRATION 500
 
 /*
 	With 72:8 gear ratio (9:1),
@@ -57,9 +49,22 @@ bool AUTO_POSITION_OFFSET = false;
 #define DRIVER_MICROSTEPS 0
 #define STEPS_PER_REVOLUTION 1800 //used by the centering function
 #define STEPS_LIMIT 400	//How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
-int STEPS_LIMIT_ALLOWED = STEPS_LIMIT;
-int MOVE_THRESHOLD = 1;			//how many steps off "correct" position before is starts moving
-int MOVE_THRESHOLD_CENTER = 10; //how many steps off center before it starts moving
+
+#define DEFAULT_SETTINGS { 1200,2000,1600,50,25,-7, STEPS_LIMIT, 1,10,false }
+
+struct
+{
+	int DRIVER_MAX_SPEED;	//in steps per second?
+	int DRIVER_MAX_ACC;
+	int DRIVER_CURRENT;		//in mA?
+	int DISPLAY_BRIGHTNESS;	//0-255
+	int GYRO_UPDATE_TIME;		//in ms, how often to read data from the gyro
+	float POSITION_OFFSET;		//used to calibrate the center gyro position
+	int STEPS_LIMIT_ALLOWED;
+	int MOVE_THRESHOLD;			//how many steps off "correct" position before is starts moving
+	int MOVE_THRESHOLD_CENTER; //how many steps off center before it starts moving
+	bool AUTO_POSITION_OFFSET;
+} SETTINGS = DEFAULT_SETTINGS;
 
 SoftwareSerial SoftSerial( DRIVER_RX, DRIVER_TX );
 TMC2209Stepper TMCdriver( &SoftSerial, DRIVER_RSENSE, DRIVER_ADDRESS );
@@ -364,8 +369,8 @@ void calibratePosition()
 	stepper.setCurrentPosition( 0 );
 
 	//go back to the previous settings
-	stepper.setMaxSpeed( DRIVER_MAX_SPEED );
-	stepper.setAcceleration( DRIVER_MAX_ACC );
+	stepper.setMaxSpeed( SETTINGS.DRIVER_MAX_SPEED );
+	stepper.setAcceleration( SETTINGS.DRIVER_MAX_ACC );
 	lcd.clear();
 }
 
@@ -383,13 +388,14 @@ double readSensorData()
 	sensors_event_t orientationData;
 	bno.getEvent( &orientationData, Adafruit_BNO055::VECTOR_EULER );
 
-	return orientationData.orientation.y - POSITION_OFFSET;
+	return orientationData.orientation.y - SETTINGS.POSITION_OFFSET;
 }
 
 
 void setup()
 {
-	int set = 0;
+	eeprom_read_block( (void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
+
 #ifdef debug
 	Serial.begin( 9600 );
 	Serial.print( F( "Setup begin...  " ) );
@@ -407,18 +413,18 @@ void setup()
 	pinMode( VOLTAGE_SENSE, INPUT );
 
 	TMCdriver.begin();
-	TMCdriver.rms_current( DRIVER_CURRENT );
+	TMCdriver.rms_current( SETTINGS.DRIVER_CURRENT );
 	TMCdriver.pwm_autoscale( 1 );
 	TMCdriver.microsteps( DRIVER_MICROSTEPS );
-	stepper.setMaxSpeed( DRIVER_MAX_SPEED );
-	stepper.setAcceleration( DRIVER_MAX_ACC );
+	stepper.setMaxSpeed( SETTINGS.DRIVER_MAX_SPEED );
+	stepper.setAcceleration( SETTINGS.DRIVER_MAX_ACC );
 	stepper.setEnablePin( DRIVER_ENABLE );
 	stepper.setPinsInverted( false, false, true );
 	stepper.disableOutputs();
 
 	lcd.begin();
 	lcd.noBacklight(); //as brightness is controlled by arduino
-	analogWrite( LCD_BRIGHTNESS, DISPLAY_BRIGHTNESS );
+	analogWrite( LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS );
 	lcd.clear();
 
 	if (!bno.begin())
@@ -518,12 +524,14 @@ void menu()
 			int counter = 0;
 
 			//max string length = 13 because we also need 2 fields to print the arrow
+			//0
 			if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
 				lcd.print( F( "Calib. light" ) );
 				lcd.setCursor( 3, 1 );
 				lcd.print( F( "Calib. gyro" ) );
 			}
+			//2
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
 				lcd.print( F( "Driver speed" ) );
@@ -547,6 +555,18 @@ void menu()
 				lcd.print( F( "Brightness" ) );
 				lcd.setCursor( 3, 1 );
 				lcd.print( F( "Auto calib." ) );
+			}
+			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
+			{
+				lcd.print( F( "Save setting" ) );
+				lcd.setCursor( 3, 1 );
+				lcd.print( F( "Load setting" ) );
+			}
+			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
+			{
+				lcd.print( F( "Restore def." ) );
+				//lcd.setCursor( 3, 1 );
+				//lcd.print( F( "Load setting" ) );
 			}
 
 			//print selection arrow
@@ -598,7 +618,7 @@ void menu()
 
 					if (buttonOK.state() == 1)
 					{
-						POSITION_OFFSET = gyroData + POSITION_OFFSET;
+						SETTINGS.POSITION_OFFSET = gyroData + SETTINGS.POSITION_OFFSET;
 					}
 					else if (buttonESC.state())
 					{
@@ -609,68 +629,44 @@ void menu()
 			else if (menuCurrentItem == 2)
 			{
 				lcd.print( F( "Max speed" ) );
-				DRIVER_MAX_SPEED = menuInner( DRIVER_MAX_SPEED, 0, 4000, 1, 10 );
-				stepper.setMaxSpeed( DRIVER_MAX_SPEED );
-#ifdef debug
-				Serial.print( F( "Max speed set to " ) );
-				Serial.println( DRIVER_MAX_SPEED );
-#endif
+				SETTINGS.DRIVER_MAX_SPEED = menuInner( SETTINGS.DRIVER_MAX_SPEED, 0, 4000, 1, 10 );
+				stepper.setMaxSpeed( SETTINGS.DRIVER_MAX_SPEED );
 				continue;
 
 			}
 			else if (menuCurrentItem == 3)
 			{
 				lcd.print( F( "Acceleration" ) );
-				DRIVER_MAX_ACC = menuInner( DRIVER_MAX_ACC, 0, 4000, 1, 10 );
-				stepper.setAcceleration( DRIVER_MAX_ACC );
-#ifdef debug
-				Serial.print( F( "Max acceleration set to " ) );
-				Serial.println( DRIVER_MAX_ACC );
-#endif
+				SETTINGS.DRIVER_MAX_ACC = menuInner( SETTINGS.DRIVER_MAX_ACC, 0, 4000, 1, 10 );
+				stepper.setAcceleration( SETTINGS.DRIVER_MAX_ACC );
 				continue;
 
 			}
 			else if (menuCurrentItem == 4)
 			{
 				lcd.print( F( "Driver current" ) );
-				DRIVER_CURRENT = menuInner( DRIVER_CURRENT, 0, 2000, 1, 10 );
-				TMCdriver.rms_current( DRIVER_CURRENT );
-#ifdef debug
-				Serial.print( F( "Driver current set to " ) );
-				Serial.println( DRIVER_CURRENT );
-#endif
+				SETTINGS.DRIVER_CURRENT = menuInner( SETTINGS.DRIVER_CURRENT, 0, 2000, 1, 10 );
+				TMCdriver.rms_current( SETTINGS.DRIVER_CURRENT );
 				continue;
 
 			}
 			else if (menuCurrentItem == 5)
 			{
 				lcd.print( F( "Move threshold" ) );
-				MOVE_THRESHOLD = menuInner( MOVE_THRESHOLD, 0, STEPS_LIMIT, 1 );
-#ifdef debug
-				Serial.print( F( "Move threshold set to " ) );
-				Serial.println( MOVE_THRESHOLD );
-#endif
+				SETTINGS.MOVE_THRESHOLD = menuInner( SETTINGS.MOVE_THRESHOLD, 0, STEPS_LIMIT, 1 );
 				continue;
 
 			}
 			else if (menuCurrentItem == 6)
 			{
 				lcd.print( F( "Center thr." ) );
-				MOVE_THRESHOLD_CENTER = menuInner( MOVE_THRESHOLD_CENTER, 0, STEPS_LIMIT, 1 );
-#ifdef debug
-				Serial.print( F( "Move from center threshold set to " ) );
-				Serial.println( MOVE_THRESHOLD_CENTER );
-#endif
+				SETTINGS.MOVE_THRESHOLD_CENTER = menuInner( SETTINGS.MOVE_THRESHOLD_CENTER, 0, STEPS_LIMIT, 1 );
 				continue;
 			}
 			else if (menuCurrentItem == 7)
 			{
 				lcd.print( F( "Rotation limit" ) );
-				STEPS_LIMIT_ALLOWED = menuInner( STEPS_LIMIT_ALLOWED, 0, STEPS_LIMIT, 1 );
-#ifdef debug
-				Serial.print( F( "Steps limit set to " ) );
-				Serial.println( STEPS_LIMIT_ALLOWED );
-#endif
+				SETTINGS.STEPS_LIMIT_ALLOWED = menuInner( SETTINGS.STEPS_LIMIT_ALLOWED, 0, STEPS_LIMIT, 1 );
 				continue;
 			}
 			else if (menuCurrentItem == 8)
@@ -680,7 +676,7 @@ void menu()
 				lcd.print( F( "Display" ) );
 				lcd.setCursor( 0, 1 );
 				lcd.print( F( "brightness" ) );
-				int DISPLAY_BRIGHTNESS_local = DISPLAY_BRIGHTNESS;
+				int DISPLAY_BRIGHTNESS_local = SETTINGS.DISPLAY_BRIGHTNESS;
 				int DISPLAY_BRIGHTNESS_local_displayed = -1;
 
 				while (1)
@@ -708,20 +704,45 @@ void menu()
 					}
 					else if (buttonESC.state())
 					{
-						analogWrite( LCD_BRIGHTNESS, DISPLAY_BRIGHTNESS );
+						analogWrite( LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS );
 						break;
 					}
 					else if (buttonOK.state())
 					{
-						DISPLAY_BRIGHTNESS = DISPLAY_BRIGHTNESS_local;
+						SETTINGS.DISPLAY_BRIGHTNESS = DISPLAY_BRIGHTNESS_local;
 						break;
 					}
 				}
 			}
-			else if (menuCurrentItem == 7)
+			else if (menuCurrentItem == 9)
 			{
 				lcd.print( F( "Auto calib." ) );
-				AUTO_POSITION_OFFSET = menuInner( AUTO_POSITION_OFFSET, 0, 1, 1 );
+				SETTINGS.AUTO_POSITION_OFFSET = menuInner( SETTINGS.AUTO_POSITION_OFFSET, 0, 1, 1 );
+				continue;
+			}
+			else if (menuCurrentItem == 10)
+			{
+				eeprom_write_block( (const void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
+				continue;
+			}
+			else if (menuCurrentItem == 11)
+			{
+				eeprom_read_block( (void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
+
+				TMCdriver.rms_current( SETTINGS.DRIVER_CURRENT );
+				stepper.setMaxSpeed( SETTINGS.DRIVER_MAX_SPEED );
+				stepper.setAcceleration( SETTINGS.DRIVER_MAX_ACC );
+				analogWrite( LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS );
+				continue;
+			}
+			else if (menuCurrentItem == 12)
+			{
+				SETTINGS = DEFAULT_SETTINGS;
+				TMCdriver.rms_current( SETTINGS.DRIVER_CURRENT );
+				stepper.setMaxSpeed( SETTINGS.DRIVER_MAX_SPEED );
+				stepper.setAcceleration( SETTINGS.DRIVER_MAX_ACC );
+				analogWrite( LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS );
+				eeprom_write_block( (const void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
 				continue;
 			}
 			else
@@ -755,14 +776,14 @@ void loop()
 	/*
 		Update the gyro value.
 	*/
-	if (millis() - gyroUpdate > GYRO_UPDATE_TIME)
+	if (millis() - gyroUpdate > SETTINGS.GYRO_UPDATE_TIME)
 	{
 		gyroVal = readSensorData();
 
-		if (AUTO_POSITION_OFFSET)
+		if (SETTINGS.AUTO_POSITION_OFFSET)
 		{
-			if (gyroVal > 0) POSITION_OFFSET += 0.001;
-			else POSITION_OFFSET -= 0.001;
+			if (gyroVal > 0) SETTINGS.POSITION_OFFSET += 0.001;
+			else SETTINGS.POSITION_OFFSET -= 0.001;
 		}
 
 
@@ -777,16 +798,16 @@ void loop()
 		//gyroVal is in degrees.
 		int newTarget = gyroVal * 5;	//gyroVal / 90*450 as gyroVal is degrees of center and it takes 450 steps to rotate 90 degrees
 
-		if (abs( newTarget ) < MOVE_THRESHOLD_CENTER)
+		if (abs( newTarget ) < SETTINGS.MOVE_THRESHOLD_CENTER)
 		{
 			newTarget = 0;
 			previousTarget = 0;
 			stepper.moveTo( 0 );
 		}
-		else if (abs( newTarget - previousTarget ) > MOVE_THRESHOLD)
+		else if (abs( newTarget - previousTarget ) > SETTINGS.MOVE_THRESHOLD)
 		{
-			if (newTarget > STEPS_LIMIT_ALLOWED) newTarget = STEPS_LIMIT_ALLOWED;
-			else if (newTarget < -STEPS_LIMIT_ALLOWED) newTarget = -STEPS_LIMIT_ALLOWED;
+			if (newTarget > SETTINGS.STEPS_LIMIT_ALLOWED) newTarget = SETTINGS.STEPS_LIMIT_ALLOWED;
+			else if (newTarget < -SETTINGS.STEPS_LIMIT_ALLOWED) newTarget = -SETTINGS.STEPS_LIMIT_ALLOWED;
 
 			stepper.moveTo( newTarget );
 
@@ -821,10 +842,10 @@ void loop()
 		}
 		break;
 
-	//if button is held down
-	case 2: 
+		//if button is held down
+	case 2:
 		int modeSave = mode;
-		
+
 		calibratePosition();
 
 		if (modeSave == 1)
