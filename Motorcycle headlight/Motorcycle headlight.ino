@@ -5,6 +5,7 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
 #include <utility/imumaths.h>
+#include <avr/eeprom.h>
 
 //#define debug //comment out to disable debug/serial commands
 
@@ -28,11 +29,12 @@
 int mode = -1; //used in main loop to turn on/off gyro function
 
 int DRIVER_MAX_SPEED = 1200;	//in steps per second?
-int DRIVER_MAX_ACC = 2500;
-int DRIVER_CURRENT = 1500;		//in mA?
-int DISPLAY_BRIGHTNESS = 100;	//0-255
-int GYRO_UPDATE_TIME = 100;		//in ms, how often to read data from the gyro
-float POSITION_OFFSET = 0;		//used to calibrate the gyro position
+int DRIVER_MAX_ACC = 2000;
+int DRIVER_CURRENT = 1600;		//in mA?
+int DISPLAY_BRIGHTNESS = 50;	//0-255
+int GYRO_UPDATE_TIME = 25;		//in ms, how often to read data from the gyro
+float POSITION_OFFSET = -7;		//used to calibrate the center gyro position
+bool AUTO_POSITION_OFFSET = false;
 
 #define DRIVER_ADDRESS 0b00
 #define DRIVER_RSENSE 0.11f
@@ -56,8 +58,8 @@ float POSITION_OFFSET = 0;		//used to calibrate the gyro position
 #define STEPS_PER_REVOLUTION 1800 //used by the centering function
 #define STEPS_LIMIT 400	//How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
 int STEPS_LIMIT_ALLOWED = STEPS_LIMIT;
-int MOVE_THRESHOLD = 5;			//how many steps off "correct" position before is starts moving
-int MOVE_THRESHOLD_CENTER = 35; //how many steps off center before it starts moving
+int MOVE_THRESHOLD = 1;			//how many steps off "correct" position before is starts moving
+int MOVE_THRESHOLD_CENTER = 10; //how many steps off center before it starts moving
 
 SoftwareSerial SoftSerial( DRIVER_RX, DRIVER_TX );
 TMC2209Stepper TMCdriver( &SoftSerial, DRIVER_RSENSE, DRIVER_ADDRESS );
@@ -157,7 +159,7 @@ void findDevices()
 	byte error, address;
 	int nDevices;
 
-	Serial.println( F("Scanning...") );
+	Serial.println( F( "Scanning..." ) );
 
 	nDevices = 0;
 	for (address = 1; address < 127; address++)
@@ -170,25 +172,25 @@ void findDevices()
 
 		if (error == 0)
 		{
-			Serial.print( F("I2C device found at address 0x") );
+			Serial.print( F( "I2C device found at address 0x" ) );
 			if (address < 16)
-				Serial.print( F("0") );
+				Serial.print( F( "0" ) );
 			Serial.println( address, HEX );
 
 			nDevices++;
 		}
 		else if (error == 4)
 		{
-			Serial.print( F("Unknown error at address 0x") );
+			Serial.print( F( "Unknown error at address 0x" ) );
 			if (address < 16)
-				Serial.print( F("0") );
+				Serial.print( F( "0" ) );
 			Serial.println( address, HEX );
 		}
 	}
 	if (nDevices == 0)
-		Serial.println( F("No I2C devices found\n") );
+		Serial.println( F( "No I2C devices found\n" ) );
 	else
-		Serial.println( F("done\n") );
+		Serial.println( F( "done\n" ) );
 }
 
 
@@ -210,11 +212,11 @@ void serialCommands()
 			if (speed == 0)
 			{
 				stepper.disableOutputs();
-				Serial.println( F("Stepper disabled") );
+				Serial.println( F( "Stepper disabled" ) );
 			}
 			else
 			{
-				Serial.print( F( "Speed set to ") );
+				Serial.print( F( "Speed set to " ) );
 				Serial.println( speed );
 				stepper.enableOutputs();
 				stepper.setMaxSpeed( speed );
@@ -225,7 +227,7 @@ void serialCommands()
 		case 'p':
 		{
 			int position = data.substring( 1 ).toInt();
-			Serial.print( F( "Moving stepper to position ") );
+			Serial.print( F( "Moving stepper to position " ) );
 			Serial.println( position );
 			stepper.moveTo( position );
 			break;
@@ -235,7 +237,7 @@ void serialCommands()
 		{
 			int speed = data.substring( 1 ).toInt();
 
-			Serial.print( F( "Acceleration set to ") );
+			Serial.print( F( "Acceleration set to " ) );
 			Serial.println( speed );
 			stepper.enableOutputs();
 			stepper.setAcceleration( speed );
@@ -249,13 +251,13 @@ void serialCommands()
 		}
 		case 'd':
 		{
-			Serial.println( F( "Stepper disabled.") );
+			Serial.println( F( "Stepper disabled." ) );
 			stepper.disableOutputs();
 			break;
 		}
 
 		default:
-			Serial.println( F( "Unknown command!") );
+			Serial.println( F( "Unknown command!" ) );
 		}
 	}
 }
@@ -328,7 +330,7 @@ void calibratePosition()
 	stepper.setAcceleration( DRIVER_MAX_ACC_CALIBRATION / 2 );
 
 	//again arbitrary multiplier - too small and we don't reach other side of the magnet
-	stepper.move( -STEPS_PER_REVOLUTION * 0.04 * direction);
+	stepper.move( -STEPS_PER_REVOLUTION * 0.04 * direction );
 
 	while (stepper.distanceToGo() != 0 && !digitalRead( HALL_SENSOR ))
 	{
@@ -371,7 +373,7 @@ void calibratePosition()
 	Those values were obtained by gathering data on different voltage levels and doing
 	the linear curve fit in LoggerPro. More accurate than calculating from resistor's values used and requires less brain power.
 */
-float voltMeter() {	return (float) analogRead( VOLTAGE_SENSE ) * 0.02764 + 0.07088; }
+float voltMeter() { return (float) analogRead( VOLTAGE_SENSE ) * 0.02764 + 0.07088; }
 
 /*
 	Returns the angle from the gyro. In degrees off center.
@@ -390,7 +392,7 @@ void setup()
 	int set = 0;
 #ifdef debug
 	Serial.begin( 9600 );
-	Serial.print( F("Setup begin...  ") );
+	Serial.print( F( "Setup begin...  " ) );
 #endif
 	SoftSerial.begin( 9600 );
 	TMCdriver.beginSerial( 9600 );
@@ -426,8 +428,9 @@ void setup()
 
 	//findDevices();
 
+	calibratePosition();
 #ifdef debug
-	Serial.println( F(" done.") );
+	Serial.println( F( " done." ) );
 #endif
 }
 
@@ -502,7 +505,7 @@ int menuInner( int startValue, int min, int max, int y, int multiplier = 1 )
 void menu()
 {
 	int menuCurrentItem = 0;
-	const int menuItemsCount = 8; //increase when adding menu options
+	const int menuItemsCount = 9; //increase when adding menu options
 	bool displayUpdate = true;
 
 
@@ -525,7 +528,7 @@ void menu()
 			{
 				lcd.print( F( "Driver speed" ) );
 				lcd.setCursor( 3, 1 );
-				lcd.print( F( "Driver acc" ) );
+				lcd.print( F( "Driver accel" ) );
 			}
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
@@ -542,8 +545,8 @@ void menu()
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
 				lcd.print( F( "Brightness" ) );
-				//lcd.setCursor( 3, 1 );
-				//lcd.print( F( "Steps limit" ) );
+				lcd.setCursor( 3, 1 );
+				lcd.print( F( "Auto calib." ) );
 			}
 
 			//print selection arrow
@@ -595,55 +598,10 @@ void menu()
 
 					if (buttonOK.state() == 1)
 					{
-						POSITION_OFFSET = gyroData;
+						POSITION_OFFSET = gyroData + POSITION_OFFSET;
 					}
 					else if (buttonESC.state())
 					{
-						break;
-					}
-				}
-			}
-			else if (menuCurrentItem == 8)
-			{
-				//could use manuInner function but I want the brightness to update as
-				//I change it.
-				lcd.print( F( "Display" ) );
-				lcd.setCursor( 0, 1 );
-				lcd.print( F( "brightness" ) );
-				int DISPLAY_BRIGHTNESS_local = DISPLAY_BRIGHTNESS;
-				int DISPLAY_BRIGHTNESS_local_displayed = -1;
-
-				while (1)
-				{
-					if (DISPLAY_BRIGHTNESS_local_displayed != DISPLAY_BRIGHTNESS_local)
-					{
-						lcd.setCursor( 13, 0 );
-						lcd.print( F( "   " ) );
-						lcd.setCursor( 13, 0 );
-						lcd.print( DISPLAY_BRIGHTNESS_local );
-						DISPLAY_BRIGHTNESS_local_displayed = DISPLAY_BRIGHTNESS_local;
-					}
-
-					if (buttonUp.state())
-					{
-						DISPLAY_BRIGHTNESS_local++;
-						if (DISPLAY_BRIGHTNESS_local > 255) DISPLAY_BRIGHTNESS_local = 255;
-						analogWrite( LCD_BRIGHTNESS, DISPLAY_BRIGHTNESS_local );
-					}
-					else if (buttonDown.state())
-					{
-						DISPLAY_BRIGHTNESS_local--;
-						if (DISPLAY_BRIGHTNESS_local < 0) DISPLAY_BRIGHTNESS_local = 0;
-						analogWrite( LCD_BRIGHTNESS, DISPLAY_BRIGHTNESS_local );
-					}
-					else if (buttonESC.state())
-					{
-						analogWrite( LCD_BRIGHTNESS, DISPLAY_BRIGHTNESS );
-						break;
-					}
-					else if (buttonOK.state())
-					{
-						DISPLAY_BRIGHTNESS = DISPLAY_BRIGHTNESS_local;
 						break;
 					}
 				}
@@ -715,6 +673,57 @@ void menu()
 #endif
 				continue;
 			}
+			else if (menuCurrentItem == 8)
+			{
+				//could use manuInner function but I want the brightness to update as
+				//I change it.
+				lcd.print( F( "Display" ) );
+				lcd.setCursor( 0, 1 );
+				lcd.print( F( "brightness" ) );
+				int DISPLAY_BRIGHTNESS_local = DISPLAY_BRIGHTNESS;
+				int DISPLAY_BRIGHTNESS_local_displayed = -1;
+
+				while (1)
+				{
+					if (DISPLAY_BRIGHTNESS_local_displayed != DISPLAY_BRIGHTNESS_local)
+					{
+						lcd.setCursor( 13, 0 );
+						lcd.print( F( "   " ) );
+						lcd.setCursor( 13, 0 );
+						lcd.print( DISPLAY_BRIGHTNESS_local );
+						DISPLAY_BRIGHTNESS_local_displayed = DISPLAY_BRIGHTNESS_local;
+					}
+
+					if (buttonUp.state())
+					{
+						DISPLAY_BRIGHTNESS_local++;
+						if (DISPLAY_BRIGHTNESS_local > 255) DISPLAY_BRIGHTNESS_local = 255;
+						analogWrite( LCD_BRIGHTNESS, DISPLAY_BRIGHTNESS_local );
+					}
+					else if (buttonDown.state())
+					{
+						DISPLAY_BRIGHTNESS_local--;
+						if (DISPLAY_BRIGHTNESS_local < 0) DISPLAY_BRIGHTNESS_local = 0;
+						analogWrite( LCD_BRIGHTNESS, DISPLAY_BRIGHTNESS_local );
+					}
+					else if (buttonESC.state())
+					{
+						analogWrite( LCD_BRIGHTNESS, DISPLAY_BRIGHTNESS );
+						break;
+					}
+					else if (buttonOK.state())
+					{
+						DISPLAY_BRIGHTNESS = DISPLAY_BRIGHTNESS_local;
+						break;
+					}
+				}
+			}
+			else if (menuCurrentItem == 7)
+			{
+				lcd.print( F( "Auto calib." ) );
+				AUTO_POSITION_OFFSET = menuInner( AUTO_POSITION_OFFSET, 0, 1, 1 );
+				continue;
+			}
 			else
 			{
 #ifdef debug
@@ -749,6 +758,14 @@ void loop()
 	if (millis() - gyroUpdate > GYRO_UPDATE_TIME)
 	{
 		gyroVal = readSensorData();
+
+		if (AUTO_POSITION_OFFSET)
+		{
+			if (gyroVal > 0) POSITION_OFFSET += 0.001;
+			else POSITION_OFFSET -= 0.001;
+		}
+
+
 		gyroUpdate = millis();
 	}
 
@@ -803,10 +820,18 @@ void loop()
 			}
 		}
 		break;
-	case 2: //if button is held down
+
+	//if button is held down
+	case 2: 
 		int modeSave = mode;
+		
 		calibratePosition();
-		mode = modeSave;
+
+		if (modeSave == 1)
+			mode = 1;
+		else
+			mode = 0;
+
 		break;
 	}
 
