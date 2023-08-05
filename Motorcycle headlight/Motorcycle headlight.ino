@@ -511,7 +511,7 @@ int menuInner( int startValue, int min, int max, int y, int multiplier = 1 )
 void menu()
 {
 	int menuCurrentItem = 0;
-	const int menuItemsCount = 9; //increase when adding menu options
+	const int menuItemsCount = 12; //increase when adding menu options
 	bool displayUpdate = true;
 
 
