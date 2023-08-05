@@ -52,9 +52,13 @@ int mode = -1; //used in main loop to turn on/off gyro function
 
 #define DEFAULT_SETTINGS { 1200,2000,1600,50,25,-7, STEPS_LIMIT, 1,10,false }
 
+/*
+	The way to store/save settings like this it taken from
+	catalkn's post at https://forum.arduino.cc/t/how-to-save-configuration/45314/6
+*/
 struct
 {
-	int DRIVER_MAX_SPEED;	//in steps per second?
+	int DRIVER_MAX_SPEED;	//in steps per second
 	int DRIVER_MAX_ACC;
 	int DRIVER_CURRENT;		//in mA?
 	int DISPLAY_BRIGHTNESS;	//0-255
