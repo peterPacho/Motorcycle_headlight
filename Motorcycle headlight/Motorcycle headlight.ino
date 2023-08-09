@@ -362,6 +362,9 @@ void calibratePosition()
 		stepper.run();
 	}
 
+	//go back to the previous settings
+	stepper.setMaxSpeed( SETTINGS.DRIVER_MAX_SPEED );
+	stepper.setAcceleration( SETTINGS.DRIVER_MAX_ACC );
 
 	//now reached other side of the hall range, so actual middle position is somewhere in between
 	stepper.moveTo( stepper.currentPosition() / 2 );
@@ -372,9 +375,6 @@ void calibratePosition()
 	//now we are in the actual middle position
 	stepper.setCurrentPosition( 0 );
 
-	//go back to the previous settings
-	stepper.setMaxSpeed( SETTINGS.DRIVER_MAX_SPEED );
-	stepper.setAcceleration( SETTINGS.DRIVER_MAX_ACC );
 	lcd.clear();
 }
 
