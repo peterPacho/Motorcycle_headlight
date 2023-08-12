@@ -50,7 +50,7 @@ int mode = -1; //used in main loop to turn on/off gyro function
 #define STEPS_PER_REVOLUTION 1800 //used by the centering function
 #define STEPS_LIMIT 400	//How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
 
-#define DEFAULT_SETTINGS { 1200,2000,1600,50,25,-7, STEPS_LIMIT, 1,10,false }
+#define DEFAULT_SETTINGS { 1200,2000,1600,50,25,0, STEPS_LIMIT, 1,10,0,0,0,0,0,0,0,0,0,0,0 }
 
 /*
 	The way to store/save settings like this it taken from
@@ -67,7 +67,7 @@ struct
 	int STEPS_LIMIT_ALLOWED;
 	int MOVE_THRESHOLD;			//how many steps off "correct" position before is starts moving
 	int MOVE_THRESHOLD_CENTER; //how many steps off center before it starts moving
-	bool AUTO_POSITION_OFFSET;
+	adafruit_bno055_offsets_t CALIBRATION_DATA;
 } SETTINGS = DEFAULT_SETTINGS;
 
 SoftwareSerial SoftSerial( DRIVER_RX, DRIVER_TX );
@@ -159,7 +159,29 @@ button buttonESC( BUTTON2 );
 
 
 #ifdef debug
+void displaySensorOffsets( const adafruit_bno055_offsets_t& calibData )
+{
+	Serial.print( "Accelerometer: " );
+	Serial.print( calibData.accel_offset_x ); Serial.print( " " );
+	Serial.print( calibData.accel_offset_y ); Serial.print( " " );
+	Serial.print( calibData.accel_offset_z ); Serial.print( " " );
 
+	Serial.print( "\nGyro: " );
+	Serial.print( calibData.gyro_offset_x ); Serial.print( " " );
+	Serial.print( calibData.gyro_offset_y ); Serial.print( " " );
+	Serial.print( calibData.gyro_offset_z ); Serial.print( " " );
+
+	Serial.print( "\nMag: " );
+	Serial.print( calibData.mag_offset_x ); Serial.print( " " );
+	Serial.print( calibData.mag_offset_y ); Serial.print( " " );
+	Serial.print( calibData.mag_offset_z ); Serial.print( " " );
+
+	Serial.print( "\nAccel Radius: " );
+	Serial.print( calibData.accel_radius );
+
+	Serial.print( "\nMag Radius: " );
+	Serial.print( calibData.mag_radius );
+}
 /*
 	Taken from https://learn.adafruit.com/scanning-i2c-addresses/arduino
 */
@@ -262,6 +284,14 @@ void serialCommands()
 		{
 			Serial.println( F( "Stepper disabled." ) );
 			stepper.disableOutputs();
+			break;
+		}
+		case 'g':
+		{
+			bno.getSensorOffsets( SETTINGS.CALIBRATION_DATA );
+			eeprom_write_block( (const void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
+			Serial.println( F( "Gyro calib data saved !" ) );
+			displaySensorOffsets( SETTINGS.CALIBRATION_DATA );
 			break;
 		}
 
@@ -394,6 +424,13 @@ double readSensorData()
 
 	return orientationData.orientation.y - SETTINGS.POSITION_OFFSET;
 }
+double readSensorData2()
+{
+	sensors_event_t orientationData;
+	bno.getEvent( &orientationData, Adafruit_BNO055::VECTOR_GYROSCOPE );
+
+	return orientationData.gyro.y - SETTINGS.POSITION_OFFSET;
+}
 
 
 void setup()
@@ -403,6 +440,7 @@ void setup()
 #ifdef debug
 	Serial.begin( 9600 );
 	Serial.print( F( "Setup begin...  " ) );
+	displaySensorOffsets( SETTINGS.CALIBRATION_DATA );
 #endif
 	SoftSerial.begin( 9600 );
 	TMCdriver.beginSerial( 9600 );
@@ -434,6 +472,11 @@ void setup()
 	if (!bno.begin())
 	{
 		digitalWrite( 13, HIGH );
+	}
+	else
+	{
+		bno.setSensorOffsets( SETTINGS.CALIBRATION_DATA );
+		bno.setExtCrystalUse( true );
 	}
 
 	//findDevices();
@@ -508,16 +551,11 @@ int menuInner( int startValue, int min, int max, int y, int multiplier = 1 )
 	}
 }
 
-
-/*
-	Settings menu
-*/
-void menu()
+void menu_motorDriver()
 {
 	int menuCurrentItem = 0;
-	const int menuItemsCount = 12; //increase when adding menu options
+	const int menuItemsCount = 5; //increase when adding menu options
 	bool displayUpdate = true;
-
 
 	while (1)
 	{
@@ -531,46 +569,23 @@ void menu()
 			//0
 			if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.print( F( "Calib. light" ) );
+				lcd.print( F( "Max Speed" ) );
 				lcd.setCursor( 3, 1 );
-				lcd.print( F( "Calib. gyro" ) );
+				lcd.print( F( "Acceleration" ) );
 			}
 			//2
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.print( F( "Driver speed" ) );
-				lcd.setCursor( 3, 1 );
-				lcd.print( F( "Driver accel" ) );
-			}
-			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
-			{
-				lcd.print( F( "Driver Amps" ) );
+				lcd.print( F( "Current/Amps" ) );
 				lcd.setCursor( 3, 1 );
 				lcd.print( F( "Move thr." ) );
 			}
+			//4
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
 				lcd.print( F( "Center thr." ) );
 				lcd.setCursor( 3, 1 );
 				lcd.print( F( "Steps limit" ) );
-			}
-			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
-			{
-				lcd.print( F( "Brightness" ) );
-				lcd.setCursor( 3, 1 );
-				lcd.print( F( "Auto calib." ) );
-			}
-			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
-			{
-				lcd.print( F( "Save setting" ) );
-				lcd.setCursor( 3, 1 );
-				lcd.print( F( "Load setting" ) );
-			}
-			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
-			{
-				lcd.print( F( "Restore def." ) );
-				//lcd.setCursor( 3, 1 );
-				//lcd.print( F( "Load setting" ) );
 			}
 
 			//print selection arrow
@@ -603,11 +618,112 @@ void menu()
 
 			if (menuCurrentItem == 0)
 			{
-				calibratePosition();
-				mode = 0;
-				return;
+				lcd.print( F( "Max speed" ) );
+				SETTINGS.DRIVER_MAX_SPEED = menuInner( SETTINGS.DRIVER_MAX_SPEED, 0, 4000, 1, 10 );
+				stepper.setMaxSpeed( SETTINGS.DRIVER_MAX_SPEED );
+				continue;
+
 			}
 			else if (menuCurrentItem == 1)
+			{
+				lcd.print( F( "Acceleration" ) );
+				SETTINGS.DRIVER_MAX_ACC = menuInner( SETTINGS.DRIVER_MAX_ACC, 0, 4000, 1, 10 );
+				stepper.setAcceleration( SETTINGS.DRIVER_MAX_ACC );
+				continue;
+
+			}
+			else if (menuCurrentItem == 2)
+			{
+				lcd.print( F( "Driver current" ) );
+				SETTINGS.DRIVER_CURRENT = menuInner( SETTINGS.DRIVER_CURRENT, 0, 2000, 1, 10 );
+				TMCdriver.rms_current( SETTINGS.DRIVER_CURRENT );
+				continue;
+
+			}
+			else if (menuCurrentItem == 3)
+			{
+				lcd.print( F( "Move threshold" ) );
+				SETTINGS.MOVE_THRESHOLD = menuInner( SETTINGS.MOVE_THRESHOLD, 0, STEPS_LIMIT, 1 );
+				continue;
+
+			}
+			else if (menuCurrentItem == 4)
+			{
+				lcd.print( F( "Center thr." ) );
+				SETTINGS.MOVE_THRESHOLD_CENTER = menuInner( SETTINGS.MOVE_THRESHOLD_CENTER, 0, STEPS_LIMIT, 1 );
+				continue;
+			}
+			else if (menuCurrentItem == 5)
+			{
+				lcd.print( F( "Rotation limit" ) );
+				SETTINGS.STEPS_LIMIT_ALLOWED = menuInner( SETTINGS.STEPS_LIMIT_ALLOWED, 0, STEPS_LIMIT, 1 );
+				continue;
+			}
+
+		}
+
+	}
+}
+
+void menu_gyroscope()
+{
+	int menuCurrentItem = 0;
+	const int menuItemsCount = 1; //increase when adding menu options
+	bool displayUpdate = true;
+
+	while (1)
+	{
+		if (displayUpdate)
+		{
+			lcd.clear();
+			lcd.setCursor( 3, 0 );
+			int counter = 0;
+
+			//max string length = 13 because we also need 2 fields to print the arrow
+			//0
+			if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
+			{
+				lcd.print( F( "Center posit" ) );
+				lcd.setCursor( 3, 1 );
+				lcd.print( F( "Calib status" ) );
+			}
+			//2
+			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
+			{
+				//lcd.print( F( "Save calib" ) );
+				//lcd.setCursor( 3, 1 );
+				//lcd.print( F( "" ) );
+			}
+
+			//print selection arrow
+			lcd.setCursor( 0, menuCurrentItem % 2 );
+			lcd.print( F( "->" ) );
+
+			displayUpdate = false;
+		}
+
+
+		if (buttonESC.state())
+			return;
+		else if (buttonUp.state())
+		{
+			menuCurrentItem--;
+			if (menuCurrentItem < 0) menuCurrentItem = menuItemsCount;
+			displayUpdate = 1;
+		}
+		else if (buttonDown.state())
+		{
+			menuCurrentItem++;
+			if (menuCurrentItem > menuItemsCount) menuCurrentItem = 0;
+			displayUpdate = 1;
+		}
+		else if (buttonOK.state())
+		{
+			lcd.clear();
+			lcd.setCursor( 0, 0 );
+			displayUpdate = true; //so display updates when we exit the sub-menu
+
+			if (menuCurrentItem == 0)
 			{
 				lcd.print( F( "Gyro: " ) );
 				lcd.setCursor( 0, 1 );
@@ -630,50 +746,124 @@ void menu()
 					}
 				}
 			}
+			else if (menuCurrentItem == 1)
+			{
+				uint8_t system, gyro, accel, mag = 0;
+				bool page = 0;
+				unsigned long lastDisplayUpdate = 0;
+
+				while (1)
+				{
+					if (millis() - lastDisplayUpdate > 300)
+					{
+						bno.getCalibration( &system, &gyro, &accel, &mag );
+						lcd.clear();
+						lcd.setCursor( 0, 0 );
+
+						if (!page)
+						{
+							lcd.print( F( "Sys: " ) );
+							lcd.print( system );
+							lcd.setCursor( 0, 1 );
+							lcd.print( F( "Gyro: " ) );
+							lcd.print( gyro );
+						}
+						else
+						{
+							lcd.print( F( "Accel: " ) );
+							lcd.print( accel );
+							lcd.setCursor( 0, 1 );
+							lcd.print( F( "Mag: " ) );
+							lcd.print( mag );
+						}
+					}
+
+					if (buttonESC.state())
+						break;
+					else if (buttonUp.state() || buttonDown.state())
+						page = !page;
+				}
+			}
+
+		}
+
+	}
+}
+
+void menu_main()
+{
+	int menuCurrentItem = 0;
+	const int menuItemsCount = 5; //increase when adding menu options
+	bool displayUpdate = true;
+
+	while (1)
+	{
+		if (displayUpdate)
+		{
+			lcd.clear();
+			lcd.setCursor( 3, 0 );
+			int counter = 0;
+
+			//max string length = 13 because we also need 2 fields to print the arrow
+			//0
+			if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
+			{
+				lcd.print( F( "Motor driver" ) );	//0
+				lcd.setCursor( 3, 1 );
+				lcd.print( F( "Gyroscope" ) );		//1
+			}
+			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
+			{
+				lcd.print( F( "Brightness" ) );		//2
+				lcd.setCursor( 3, 1 );
+				lcd.print( F( "Save settings" ) );		//3
+			}
+			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
+			{
+				lcd.print( F( "Load settings" ) );	//4
+				lcd.setCursor( 3, 1 );
+				lcd.print( F( "Restore def." ) );	//5
+			}
+
+			//print selection arrow
+			lcd.setCursor( 0, menuCurrentItem % 2 );
+			lcd.print( F( "->" ) );
+
+			displayUpdate = false;
+		}
+
+
+		if (buttonESC.state())
+			return;
+		else if (buttonUp.state())
+		{
+			menuCurrentItem--;
+			if (menuCurrentItem < 0) menuCurrentItem = menuItemsCount;
+			displayUpdate = 1;
+		}
+		else if (buttonDown.state())
+		{
+			menuCurrentItem++;
+			if (menuCurrentItem > menuItemsCount) menuCurrentItem = 0;
+			displayUpdate = 1;
+		}
+		else if (buttonOK.state())
+		{
+			lcd.clear();
+			lcd.setCursor( 0, 0 );
+			displayUpdate = true; //so display updates when we exit the sub-menu
+
+			if (menuCurrentItem == 0)
+			{
+				menu_motorDriver();
+				continue;
+			}
+			else if (menuCurrentItem == 1)
+			{
+				menu_gyroscope();
+				continue;
+			}
 			else if (menuCurrentItem == 2)
-			{
-				lcd.print( F( "Max speed" ) );
-				SETTINGS.DRIVER_MAX_SPEED = menuInner( SETTINGS.DRIVER_MAX_SPEED, 0, 4000, 1, 10 );
-				stepper.setMaxSpeed( SETTINGS.DRIVER_MAX_SPEED );
-				continue;
-
-			}
-			else if (menuCurrentItem == 3)
-			{
-				lcd.print( F( "Acceleration" ) );
-				SETTINGS.DRIVER_MAX_ACC = menuInner( SETTINGS.DRIVER_MAX_ACC, 0, 4000, 1, 10 );
-				stepper.setAcceleration( SETTINGS.DRIVER_MAX_ACC );
-				continue;
-
-			}
-			else if (menuCurrentItem == 4)
-			{
-				lcd.print( F( "Driver current" ) );
-				SETTINGS.DRIVER_CURRENT = menuInner( SETTINGS.DRIVER_CURRENT, 0, 2000, 1, 10 );
-				TMCdriver.rms_current( SETTINGS.DRIVER_CURRENT );
-				continue;
-
-			}
-			else if (menuCurrentItem == 5)
-			{
-				lcd.print( F( "Move threshold" ) );
-				SETTINGS.MOVE_THRESHOLD = menuInner( SETTINGS.MOVE_THRESHOLD, 0, STEPS_LIMIT, 1 );
-				continue;
-
-			}
-			else if (menuCurrentItem == 6)
-			{
-				lcd.print( F( "Center thr." ) );
-				SETTINGS.MOVE_THRESHOLD_CENTER = menuInner( SETTINGS.MOVE_THRESHOLD_CENTER, 0, STEPS_LIMIT, 1 );
-				continue;
-			}
-			else if (menuCurrentItem == 7)
-			{
-				lcd.print( F( "Rotation limit" ) );
-				SETTINGS.STEPS_LIMIT_ALLOWED = menuInner( SETTINGS.STEPS_LIMIT_ALLOWED, 0, STEPS_LIMIT, 1 );
-				continue;
-			}
-			else if (menuCurrentItem == 8)
 			{
 				//could use manuInner function but I want the brightness to update as
 				//I change it.
@@ -718,18 +908,13 @@ void menu()
 					}
 				}
 			}
-			else if (menuCurrentItem == 9)
+			else if (menuCurrentItem == 3) //save
 			{
-				lcd.print( F( "Auto calib." ) );
-				SETTINGS.AUTO_POSITION_OFFSET = menuInner( SETTINGS.AUTO_POSITION_OFFSET, 0, 1, 1 );
-				continue;
-			}
-			else if (menuCurrentItem == 10)
-			{
+				bno.getSensorOffsets( SETTINGS.CALIBRATION_DATA );
 				eeprom_write_block( (const void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
 				continue;
 			}
-			else if (menuCurrentItem == 11)
+			else if (menuCurrentItem == 4) //load
 			{
 				eeprom_read_block( (void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
 
@@ -739,7 +924,7 @@ void menu()
 				analogWrite( LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS );
 				continue;
 			}
-			else if (menuCurrentItem == 12)
+			else if (menuCurrentItem == 5) //default
 			{
 				SETTINGS = DEFAULT_SETTINGS;
 				TMCdriver.rms_current( SETTINGS.DRIVER_CURRENT );
@@ -749,22 +934,10 @@ void menu()
 				eeprom_write_block( (const void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
 				continue;
 			}
-			else
-			{
-#ifdef debug
-				Serial.println( F( "Trying to enter unknown menu item !" ) );
-#endif
-				//restart menu
-				menu();
-				return;
-			}
-
-			displayUpdate = 1;
 		}
 
 	}
 }
-
 
 /*
 	Is stepper.distanceToGo() > 0 then only gyro and stepper.run part is running.
@@ -783,13 +956,6 @@ void loop()
 	if (millis() - gyroUpdate > SETTINGS.GYRO_UPDATE_TIME)
 	{
 		gyroVal = readSensorData();
-
-		if (SETTINGS.AUTO_POSITION_OFFSET)
-		{
-			if (gyroVal > 0) SETTINGS.POSITION_OFFSET += 0.001;
-			else SETTINGS.POSITION_OFFSET -= 0.001;
-		}
-
 
 		gyroUpdate = millis();
 	}
@@ -879,7 +1045,7 @@ void loop()
 
 		stepper.disableOutputs();
 		mode = -1;
-		menu();
+		menu_main();
 		return;
 	}
 	else if (buttonDown.state() == 2)
@@ -939,6 +1105,31 @@ void loop()
 
 		displayUpdate = millis();
 	}
+
+
+#ifdef debug
+	serialCommands();
+	static unsigned long lastLogEvent = 0;
+	if (millis() - lastLogEvent > 500)
+	{
+		/* Display calibration status for each sensor. */
+		uint8_t system, gyro, accel, mag = 0;
+		bno.getCalibration( &system, &gyro, &accel, &mag );
+		Serial.print( "CALIBRATION: Sys=" );
+		Serial.print( system, DEC );
+		Serial.print( " Gyro=" );
+		Serial.print( gyro, DEC );
+		Serial.print( " Accel=" );
+		Serial.print( accel, DEC );
+		Serial.print( " Mag=" );
+		Serial.println( mag, DEC );
+
+		lastLogEvent = millis();
+	}
+
+#endif
+
+
 }
 
 
