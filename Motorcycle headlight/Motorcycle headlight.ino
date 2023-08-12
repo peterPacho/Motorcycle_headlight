@@ -479,9 +479,9 @@ void setup()
 		bno.setExtCrystalUse( true );
 	}
 
-	//findDevices();
-
 	calibratePosition();
+	mode = 0;
+
 #ifdef debug
 	Serial.println( F( " done." ) );
 #endif
@@ -668,7 +668,7 @@ void menu_motorDriver()
 void menu_gyroscope()
 {
 	int menuCurrentItem = 0;
-	const int menuItemsCount = 1; //increase when adding menu options
+	const int menuItemsCount = 2; //increase when adding menu options
 	bool displayUpdate = true;
 
 	while (1)
@@ -690,7 +690,7 @@ void menu_gyroscope()
 			//2
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				//lcd.print( F( "Save calib" ) );
+				lcd.print( F( "Update freq." ) );
 				//lcd.setCursor( 3, 1 );
 				//lcd.print( F( "" ) );
 			}
@@ -783,6 +783,12 @@ void menu_gyroscope()
 					else if (buttonUp.state() || buttonDown.state())
 						page = !page;
 				}
+			}
+			else if (menuCurrentItem == 2)
+			{
+				lcd.print( F( "Update freq. ms" ) );
+				SETTINGS.GYRO_UPDATE_TIME = menuInner( SETTINGS.GYRO_UPDATE_TIME, 0, 1000, 1 );
+				continue;
 			}
 
 		}
@@ -1052,6 +1058,10 @@ void loop()
 	{
 		mode = -1;
 		stepper.disableOutputs();
+	}
+	else if (buttonUp.state() == 2)
+	{
+		SETTINGS.POSITION_OFFSET = gyroVal + SETTINGS.POSITION_OFFSET;
 	}
 
 
