@@ -35,8 +35,8 @@ int mode = -1; //used in main loop to turn on/off gyro function
 /*
 	Speeds to use for calibration function.
 */
-#define DRIVER_MAX_SPEED_CALIBRATION 500
-#define DRIVER_MAX_ACC_CALIBRATION 500
+#define DRIVER_MAX_SPEED_CALIBRATION 600
+#define DRIVER_MAX_ACC_CALIBRATION 1000
 
 /*
 	With 72:8 gear ratio (9:1),
@@ -417,21 +417,13 @@ float voltMeter() { return (float) analogRead( VOLTAGE_SENSE ) * 0.02764 + 0.070
 /*
 	Returns the angle from the gyro. In degrees off center.
 */
-double readSensorData()
+float readSensorData()
 {
-	sensors_event_t orientationData;
-	bno.getEvent( &orientationData, Adafruit_BNO055::VECTOR_EULER );
+	sensors_event_t eventData;
+	bno.getEvent( &eventData );
 
-	return orientationData.orientation.y - SETTINGS.POSITION_OFFSET;
+	return eventData.orientation.y - SETTINGS.POSITION_OFFSET;
 }
-double readSensorData2()
-{
-	sensors_event_t orientationData;
-	bno.getEvent( &orientationData, Adafruit_BNO055::VECTOR_GYROSCOPE );
-
-	return orientationData.gyro.y - SETTINGS.POSITION_OFFSET;
-}
-
 
 void setup()
 {
@@ -476,6 +468,7 @@ void setup()
 	else
 	{
 		bno.setSensorOffsets( SETTINGS.CALIBRATION_DATA );
+		bno.enableAutoRange( false );
 		bno.setExtCrystalUse( true );
 	}
 
@@ -486,7 +479,6 @@ void setup()
 	Serial.println( F( " done." ) );
 #endif
 }
-
 
 
 /*
@@ -732,7 +724,7 @@ void menu_gyroscope()
 				while (1)
 				{
 					lcd.setCursor( 8, 0 );
-					double gyroData = readSensorData();
+					float gyroData = readSensorData();
 					lcd.print( gyroData );
 
 
@@ -749,7 +741,6 @@ void menu_gyroscope()
 			else if (menuCurrentItem == 1)
 			{
 				uint8_t system, gyro, accel, mag = 0;
-				bool page = 0;
 				unsigned long lastDisplayUpdate = 0;
 
 				while (1)
@@ -757,31 +748,25 @@ void menu_gyroscope()
 					if (millis() - lastDisplayUpdate > 300)
 					{
 						bno.getCalibration( &system, &gyro, &accel, &mag );
-						lcd.clear();
 						lcd.setCursor( 0, 0 );
 
-						if (!page)
-						{
-							lcd.print( F( "Sys: " ) );
-							lcd.print( system );
-							lcd.setCursor( 0, 1 );
-							lcd.print( F( "Gyro: " ) );
-							lcd.print( gyro );
-						}
-						else
-						{
-							lcd.print( F( "Accel: " ) );
-							lcd.print( accel );
-							lcd.setCursor( 0, 1 );
-							lcd.print( F( "Mag: " ) );
-							lcd.print( mag );
-						}
+						lcd.print( F( "Sys: " ) );
+						lcd.print( system );
+						lcd.print( F( "   Gyro: " ) );
+						lcd.print( gyro );
+
+						lcd.setCursor( 0, 1 );
+
+						lcd.print( F( "Accel: " ) );
+						lcd.print( accel );
+
+						lcd.print( F( "  Mag: " ) );
+						lcd.print( mag );
+
 					}
 
-					if (buttonESC.state())
+					if (buttonESC.state() || buttonOK.state())
 						break;
-					else if (buttonUp.state() || buttonDown.state())
-						page = !page;
 				}
 			}
 			else if (menuCurrentItem == 2)
@@ -814,9 +799,9 @@ void menu_main()
 			//0
 			if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.print( F( "Motor driver" ) );	//0
+				lcd.print( F( "Gyroscope" ) );
 				lcd.setCursor( 3, 1 );
-				lcd.print( F( "Gyroscope" ) );		//1
+				lcd.print( F( "Motor driver" ) );
 			}
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
@@ -861,12 +846,12 @@ void menu_main()
 
 			if (menuCurrentItem == 0)
 			{
-				menu_motorDriver();
+				menu_gyroscope();
 				continue;
 			}
 			else if (menuCurrentItem == 1)
 			{
-				menu_gyroscope();
+				menu_motorDriver();
 				continue;
 			}
 			else if (menuCurrentItem == 2)
@@ -952,7 +937,7 @@ void menu_main()
 void loop()
 {
 	static unsigned long gyroUpdate = 0;
-	static double gyroVal = 0;
+	static float gyroVal = 0;
 	static int previousTarget = 0;
 
 
@@ -1141,12 +1126,3 @@ void loop()
 
 
 }
-
-
-
-
-
-
-
-
-
