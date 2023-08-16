@@ -1,10 +1,8 @@
 ﻿#include <Wire.h>
+#include <JY901.h>
 #include <TMCStepper.h>         // https://github.com/teemuatlut/TMCStepper
 #include <AccelStepper.h>		// https://github.com/teemuatlut/TMCStepper/blob/master/examples/TMC_AccelStepper/TMC_AccelStepper.ino
 #include <LiquidCrystal_I2C.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BNO055.h>
-#include <utility/imumaths.h>
 #include <avr/eeprom.h>
 
 //#define debug //comment out to disable debug/serial commands
@@ -35,8 +33,8 @@ int mode = -1; //used in main loop to turn on/off gyro function
 /*
 	Speeds to use for calibration function.
 */
-#define DRIVER_MAX_SPEED_CALIBRATION 600
-#define DRIVER_MAX_ACC_CALIBRATION 1000
+#define DRIVER_MAX_SPEED_CALIBRATION 800
+#define DRIVER_MAX_ACC_CALIBRATION 800
 
 /*
 	With 72:8 gear ratio (9:1),
@@ -46,11 +44,11 @@ int mode = -1; //used in main loop to turn on/off gyro function
 
 	With microsteps set to 0, it takes 1800 steps for full rev.
 */
-#define DRIVER_MICROSTEPS 0
-#define STEPS_PER_REVOLUTION 1800 //used by the centering function
-#define STEPS_LIMIT 400	//How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
+#define DRIVER_MICROSTEPS 2
+#define STEPS_PER_REVOLUTION 3600 //used by the centering function
+#define STEPS_LIMIT 800	//How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
 
-#define DEFAULT_SETTINGS { 1200,2000,1600,50,25,0, STEPS_LIMIT, 1,10,0,0,0,0,0,0,0,0,0,0,0 }
+#define DEFAULT_SETTINGS { 2000,2000,1600,50,25,0, STEPS_LIMIT, 0,5 }
 
 /*
 	The way to store/save settings like this it taken from
@@ -67,14 +65,12 @@ struct
 	int STEPS_LIMIT_ALLOWED;
 	int MOVE_THRESHOLD;			//how many steps off "correct" position before is starts moving
 	int MOVE_THRESHOLD_CENTER; //how many steps off center before it starts moving
-	adafruit_bno055_offsets_t CALIBRATION_DATA;
 } SETTINGS = DEFAULT_SETTINGS;
 
 SoftwareSerial SoftSerial( DRIVER_RX, DRIVER_TX );
 TMC2209Stepper TMCdriver( &SoftSerial, DRIVER_RSENSE, DRIVER_ADDRESS );
 AccelStepper stepper = AccelStepper( stepper.DRIVER, DRIVER_STEP, DRIVER_DIRECTION );
 LiquidCrystal_I2C lcd( 0x27, 16, 2 );
-Adafruit_BNO055 bno = Adafruit_BNO055( 55, 0x28, &Wire );
 
 //debouncing class for simple buttons, default for them is high (internal pull up)
 unsigned long lastButtonEvent;	//keeps time when was the button pressed last time
@@ -414,16 +410,6 @@ void calibratePosition()
 */
 float voltMeter() { return (float) analogRead( VOLTAGE_SENSE ) * 0.02764 + 0.07088; }
 
-/*
-	Returns the angle from the gyro. In degrees off center.
-*/
-float readSensorData()
-{
-	sensors_event_t eventData;
-	bno.getEvent( &eventData );
-
-	return eventData.orientation.y - SETTINGS.POSITION_OFFSET;
-}
 
 void setup()
 {
@@ -460,17 +446,7 @@ void setup()
 	lcd.noBacklight(); //as brightness is controlled by arduino
 	analogWrite( LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS );
 	lcd.clear();
-
-	if (!bno.begin())
-	{
-		digitalWrite( 13, HIGH );
-	}
-	else
-	{
-		bno.setSensorOffsets( SETTINGS.CALIBRATION_DATA );
-		bno.enableAutoRange( false );
-		bno.setExtCrystalUse( true );
-	}
+	JY901.StartIIC();
 
 	calibratePosition();
 	mode = 0;
@@ -660,7 +636,7 @@ void menu_motorDriver()
 void menu_gyroscope()
 {
 	int menuCurrentItem = 0;
-	const int menuItemsCount = 2; //increase when adding menu options
+	const int menuItemsCount = 1; //increase when adding menu options
 	bool displayUpdate = true;
 
 	while (1)
@@ -677,14 +653,7 @@ void menu_gyroscope()
 			{
 				lcd.print( F( "Center posit" ) );
 				lcd.setCursor( 3, 1 );
-				lcd.print( F( "Calib status" ) );
-			}
-			//2
-			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
-			{
 				lcd.print( F( "Update freq." ) );
-				//lcd.setCursor( 3, 1 );
-				//lcd.print( F( "" ) );
 			}
 
 			//print selection arrow
@@ -725,12 +694,12 @@ void menu_gyroscope()
 				{
 					lcd.setCursor( 8, 0 );
 					float gyroData = readSensorData();
-					lcd.print( gyroData );
+					lcd.print( gyroData - SETTINGS.POSITION_OFFSET);
 
 
 					if (buttonOK.state() == 1)
 					{
-						SETTINGS.POSITION_OFFSET = gyroData + SETTINGS.POSITION_OFFSET;
+						SETTINGS.POSITION_OFFSET = gyroData;
 					}
 					else if (buttonESC.state())
 					{
@@ -739,37 +708,6 @@ void menu_gyroscope()
 				}
 			}
 			else if (menuCurrentItem == 1)
-			{
-				uint8_t system, gyro, accel, mag = 0;
-				unsigned long lastDisplayUpdate = 0;
-
-				while (1)
-				{
-					if (millis() - lastDisplayUpdate > 300)
-					{
-						bno.getCalibration( &system, &gyro, &accel, &mag );
-						lcd.setCursor( 0, 0 );
-
-						lcd.print( F( "Sys: " ) );
-						lcd.print( system );
-						lcd.print( F( "   Gyro: " ) );
-						lcd.print( gyro );
-
-						lcd.setCursor( 0, 1 );
-
-						lcd.print( F( "Accel: " ) );
-						lcd.print( accel );
-
-						lcd.print( F( "  Mag: " ) );
-						lcd.print( mag );
-
-					}
-
-					if (buttonESC.state() || buttonOK.state())
-						break;
-				}
-			}
-			else if (menuCurrentItem == 2)
 			{
 				lcd.print( F( "Update freq. ms" ) );
 				SETTINGS.GYRO_UPDATE_TIME = menuInner( SETTINGS.GYRO_UPDATE_TIME, 0, 1000, 1 );
@@ -901,7 +839,6 @@ void menu_main()
 			}
 			else if (menuCurrentItem == 3) //save
 			{
-				bno.getSensorOffsets( SETTINGS.CALIBRATION_DATA );
 				eeprom_write_block( (const void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
 				continue;
 			}
@@ -930,6 +867,11 @@ void menu_main()
 	}
 }
 
+float readSensorData()
+{
+	JY901.GetAngle();
+	return (float) JY901.stcAngle.Angle[1] / 32768 * 180;
+}
 /*
 	Is stepper.distanceToGo() > 0 then only gyro and stepper.run part is running.
 	Display and user input not checked to make stepper run function have less delay.
@@ -940,14 +882,12 @@ void loop()
 	static float gyroVal = 0;
 	static int previousTarget = 0;
 
-
 	/*
 		Update the gyro value.
 	*/
 	if (millis() - gyroUpdate > SETTINGS.GYRO_UPDATE_TIME)
 	{
-		gyroVal = readSensorData();
-
+		gyroVal = readSensorData() - SETTINGS.POSITION_OFFSET;
 		gyroUpdate = millis();
 	}
 
@@ -956,8 +896,8 @@ void loop()
 	*/
 	if (mode == 1)
 	{
-		//gyroVal is in degrees.
-		int newTarget = gyroVal * 5;	//gyroVal / 90*450 as gyroVal is degrees of center and it takes 450 steps to rotate 90 degrees
+		//gyroVal is in degrees off center
+		int newTarget = gyroVal * STEPS_PER_REVOLUTION / 4 / 90;
 
 		if (abs( newTarget ) < SETTINGS.MOVE_THRESHOLD_CENTER)
 		{
@@ -993,7 +933,10 @@ void loop()
 		}
 		else
 		{
-			mode = !mode;
+			if (mode == 0)
+				mode = 1;
+			else
+				mode = 0;
 
 			if (!mode)
 			{
@@ -1046,7 +989,7 @@ void loop()
 	}
 	else if (buttonUp.state() == 2)
 	{
-		SETTINGS.POSITION_OFFSET = gyroVal + SETTINGS.POSITION_OFFSET;
+		SETTINGS.POSITION_OFFSET = readSensorData();
 	}
 
 
