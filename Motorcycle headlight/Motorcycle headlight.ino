@@ -1,5 +1,4 @@
 ﻿#include <Wire.h>
-#include <JY901.h>
 #include <TMCStepper.h>         // https://github.com/teemuatlut/TMCStepper
 #include <AccelStepper.h>		// https://github.com/teemuatlut/TMCStepper/blob/master/examples/TMC_AccelStepper/TMC_AccelStepper.ino
 #include <LiquidCrystal_I2C.h>
@@ -446,7 +445,6 @@ void setup()
 	lcd.noBacklight(); //as brightness is controlled by arduino
 	analogWrite( LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS );
 	lcd.clear();
-	JY901.StartIIC();
 
 	calibratePosition();
 	mode = 0;
@@ -869,8 +867,7 @@ void menu_main()
 
 float readSensorData()
 {
-	JY901.GetAngle();
-	return (float) JY901.stcAngle.Angle[1] / 32768 * 180;
+	return 0;
 }
 /*
 	Is stepper.distanceToGo() > 0 then only gyro and stepper.run part is running.
