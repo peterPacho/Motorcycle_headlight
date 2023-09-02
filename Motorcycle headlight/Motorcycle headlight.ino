@@ -23,13 +23,14 @@
 #define BUTTON4 A2
 #define LCD_BRIGHTNESS 11 //must be a PWM pin
 #define VOLTAGE_SENSE A0
+#define LUNA_ENABLE 2
 
 int mode = -1; //used in main loop to turn on/off gyro function
 
 #define DRIVER_ADDRESS 0b00
 #define DRIVER_RSENSE 0.11f
 #define MPU 0x68
-#define LUNA_ADDRESS_1 0x10
+#define LUNA_ADDRESS_1 0x10 //this must be the default luna address
 #define LUNA_ADDRESS_2 0x11
 
 /*
@@ -402,6 +403,10 @@ void setup()
 	pinMode( HALL_SENSOR, INPUT_PULLUP );
 	pinMode( VOLTAGE_SENSE, INPUT );
 
+	//disable one of the luna sensors
+	pinMode( LUNA_ENABLE, OUTPUT );
+	digitalWrite( LUNA_ENABLE, 1 ); //luna power connected to normally closed relay, so writing 1 opens the relay
+
 	TMCdriver.begin();
 	TMCdriver.rms_current( SETTINGS.DRIVER_CURRENT );
 	TMCdriver.pwm_autoscale( 1 );
@@ -417,17 +422,20 @@ void setup()
 	analogWrite( LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS );
 	lcd.clear();
 
-	calibratePosition();
-	mode = 0;
+	//calibratePosition();
+	//mode = 0;
+
+	Wire.beginTransmission( LUNA_ADDRESS_1);
+	//if luna found on the default address, change it
+	if (Wire.endTransmission() == 0)
+	{
+		tflI2C.Set_I2C_Addr( LUNA_ADDRESS_2, LUNA_ADDRESS_1 );
+	}
+	digitalWrite( LUNA_ENABLE, 0 ); //enable the second luna
 
 #ifdef debug
 	Serial.println( F( " done." ) );
 #endif
-
-	findDevices();
-	tflI2C.Set_I2C_Addr( 0x11, 0x10 );
-	Serial.println( "\n\n\nAdd changed!!!!\n\n\n" );
-	findDevices();
 }
 
 
@@ -823,9 +831,11 @@ void menu_main()
 
 bool getBikeAngle(float& angle)
 {
-	int16_t tfDist = 0;
-	if (tflI2C.getData( tfDist, LUNA_ADDRESS_1 ))
-		return 1;
+	int16_t tfDist1 = 0, tfDist2 = 0;
+	if (tflI2C.getData( tfDist1, LUNA_ADDRESS_1 ) && tflI2C.getData( tfDist2, LUNA_ADDRESS_1 ))
+	{
+		return tfDist1 - tfDist2;
+	}
 
 	return 0;
 }
