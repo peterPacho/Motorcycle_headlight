@@ -1,9 +1,9 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
-VisualStudioVersion = 17.6.33829.357
+VisualStudioVersion = 17.7.34018.315
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Motorcycle headlight", "Motorcycle headlight.vcxproj", "{9493E531-C785-403B-A9D3-5BB0AB5EA65E}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Motorcycle headlight", "Motorcycle headlight.vcxproj", "{A22388B2-B98C-48B9-B621-5C3AF283F202}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -13,23 +13,23 @@ Global
 		Release|ARM64 = Release|ARM64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{9493E531-C785-403B-A9D3-5BB0AB5EA65E}.Debug|ARM.ActiveCfg = Debug|ARM
-		{9493E531-C785-403B-A9D3-5BB0AB5EA65E}.Debug|ARM.Build.0 = Debug|ARM
-		{9493E531-C785-403B-A9D3-5BB0AB5EA65E}.Debug|ARM.Deploy.0 = Debug|ARM
-		{9493E531-C785-403B-A9D3-5BB0AB5EA65E}.Debug|ARM64.ActiveCfg = Debug|ARM64
-		{9493E531-C785-403B-A9D3-5BB0AB5EA65E}.Debug|ARM64.Build.0 = Debug|ARM64
-		{9493E531-C785-403B-A9D3-5BB0AB5EA65E}.Debug|ARM64.Deploy.0 = Debug|ARM64
-		{9493E531-C785-403B-A9D3-5BB0AB5EA65E}.Release|ARM.ActiveCfg = Release|ARM
-		{9493E531-C785-403B-A9D3-5BB0AB5EA65E}.Release|ARM.Build.0 = Release|ARM
-		{9493E531-C785-403B-A9D3-5BB0AB5EA65E}.Release|ARM.Deploy.0 = Release|ARM
-		{9493E531-C785-403B-A9D3-5BB0AB5EA65E}.Release|ARM64.ActiveCfg = Release|ARM64
-		{9493E531-C785-403B-A9D3-5BB0AB5EA65E}.Release|ARM64.Build.0 = Release|ARM64
-		{9493E531-C785-403B-A9D3-5BB0AB5EA65E}.Release|ARM64.Deploy.0 = Release|ARM64
+		{A22388B2-B98C-48B9-B621-5C3AF283F202}.Debug|ARM.ActiveCfg = Debug|ARM
+		{A22388B2-B98C-48B9-B621-5C3AF283F202}.Debug|ARM.Build.0 = Debug|ARM
+		{A22388B2-B98C-48B9-B621-5C3AF283F202}.Debug|ARM.Deploy.0 = Debug|ARM
+		{A22388B2-B98C-48B9-B621-5C3AF283F202}.Debug|ARM64.ActiveCfg = Debug|ARM64
+		{A22388B2-B98C-48B9-B621-5C3AF283F202}.Debug|ARM64.Build.0 = Debug|ARM64
+		{A22388B2-B98C-48B9-B621-5C3AF283F202}.Debug|ARM64.Deploy.0 = Debug|ARM64
+		{A22388B2-B98C-48B9-B621-5C3AF283F202}.Release|ARM.ActiveCfg = Release|ARM
+		{A22388B2-B98C-48B9-B621-5C3AF283F202}.Release|ARM.Build.0 = Release|ARM
+		{A22388B2-B98C-48B9-B621-5C3AF283F202}.Release|ARM.Deploy.0 = Release|ARM
+		{A22388B2-B98C-48B9-B621-5C3AF283F202}.Release|ARM64.ActiveCfg = Release|ARM64
+		{A22388B2-B98C-48B9-B621-5C3AF283F202}.Release|ARM64.Build.0 = Release|ARM64
+		{A22388B2-B98C-48B9-B621-5C3AF283F202}.Release|ARM64.Deploy.0 = Release|ARM64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {4E8B9CD9-26BE-4135-8864-A1364419EDAE}
+		SolutionGuid = {94F144E0-4839-4811-9359-398467D1A0CA}
 	EndGlobalSection
 EndGlobal

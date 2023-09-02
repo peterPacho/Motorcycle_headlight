@@ -1,10 +1,11 @@
-﻿#include <Wire.h>
+#include <Wire.h>
 #include <TMCStepper.h>         // https://github.com/teemuatlut/TMCStepper
 #include <AccelStepper.h>		// https://github.com/teemuatlut/TMCStepper/blob/master/examples/TMC_AccelStepper/TMC_AccelStepper.ino
 #include <LiquidCrystal_I2C.h>
 #include <avr/eeprom.h>
+#include <TFLI2C.h>
 
-//#define debug //comment out to disable debug/serial commands
+#define debug //comment out to disable debug/serial commands
 
 /*
 	Arduino pin-out. SDA (white) - A4, SCL (yellow) - A5
@@ -28,6 +29,8 @@ int mode = -1; //used in main loop to turn on/off gyro function
 #define DRIVER_ADDRESS 0b00
 #define DRIVER_RSENSE 0.11f
 #define MPU 0x68
+#define LUNA_ADDRESS_1 0x10
+#define LUNA_ADDRESS_2 0x11
 
 /*
 	Speeds to use for calibration function.
@@ -70,6 +73,7 @@ SoftwareSerial SoftSerial( DRIVER_RX, DRIVER_TX );
 TMC2209Stepper TMCdriver( &SoftSerial, DRIVER_RSENSE, DRIVER_ADDRESS );
 AccelStepper stepper = AccelStepper( stepper.DRIVER, DRIVER_STEP, DRIVER_DIRECTION );
 LiquidCrystal_I2C lcd( 0x27, 16, 2 );
+TFLI2C tflI2C;
 
 //debouncing class for simple buttons, default for them is high (internal pull up)
 unsigned long lastButtonEvent;	//keeps time when was the button pressed last time
@@ -154,29 +158,6 @@ button buttonESC( BUTTON2 );
 
 
 #ifdef debug
-void displaySensorOffsets( const adafruit_bno055_offsets_t& calibData )
-{
-	Serial.print( "Accelerometer: " );
-	Serial.print( calibData.accel_offset_x ); Serial.print( " " );
-	Serial.print( calibData.accel_offset_y ); Serial.print( " " );
-	Serial.print( calibData.accel_offset_z ); Serial.print( " " );
-
-	Serial.print( "\nGyro: " );
-	Serial.print( calibData.gyro_offset_x ); Serial.print( " " );
-	Serial.print( calibData.gyro_offset_y ); Serial.print( " " );
-	Serial.print( calibData.gyro_offset_z ); Serial.print( " " );
-
-	Serial.print( "\nMag: " );
-	Serial.print( calibData.mag_offset_x ); Serial.print( " " );
-	Serial.print( calibData.mag_offset_y ); Serial.print( " " );
-	Serial.print( calibData.mag_offset_z ); Serial.print( " " );
-
-	Serial.print( "\nAccel Radius: " );
-	Serial.print( calibData.accel_radius );
-
-	Serial.print( "\nMag Radius: " );
-	Serial.print( calibData.mag_radius );
-}
 /*
 	Taken from https://learn.adafruit.com/scanning-i2c-addresses/arduino
 */
@@ -281,15 +262,6 @@ void serialCommands()
 			stepper.disableOutputs();
 			break;
 		}
-		case 'g':
-		{
-			bno.getSensorOffsets( SETTINGS.CALIBRATION_DATA );
-			eeprom_write_block( (const void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
-			Serial.println( F( "Gyro calib data saved !" ) );
-			displaySensorOffsets( SETTINGS.CALIBRATION_DATA );
-			break;
-		}
-
 		default:
 			Serial.println( F( "Unknown command!" ) );
 		}
@@ -415,9 +387,8 @@ void setup()
 	eeprom_read_block( (void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
 
 #ifdef debug
-	Serial.begin( 9600 );
+	Serial.begin( 115200 );
 	Serial.print( F( "Setup begin...  " ) );
-	displaySensorOffsets( SETTINGS.CALIBRATION_DATA );
 #endif
 	SoftSerial.begin( 9600 );
 	TMCdriver.beginSerial( 9600 );
@@ -452,6 +423,11 @@ void setup()
 #ifdef debug
 	Serial.println( F( " done." ) );
 #endif
+
+	findDevices();
+	tflI2C.Set_I2C_Addr( 0x11, 0x10 );
+	Serial.println( "\n\n\nAdd changed!!!!\n\n\n" );
+	findDevices();
 }
 
 
@@ -633,6 +609,7 @@ void menu_motorDriver()
 
 void menu_gyroscope()
 {
+	return; //this menu disabled
 	int menuCurrentItem = 0;
 	const int menuItemsCount = 1; //increase when adding menu options
 	bool displayUpdate = true;
@@ -649,9 +626,9 @@ void menu_gyroscope()
 			//0
 			if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.print( F( "Center posit" ) );
+				lcd.print( F( "" ) );
 				lcd.setCursor( 3, 1 );
-				lcd.print( F( "Update freq." ) );
+				lcd.print( F( "" ) );
 			}
 
 			//print selection arrow
@@ -684,32 +661,11 @@ void menu_gyroscope()
 
 			if (menuCurrentItem == 0)
 			{
-				lcd.print( F( "Gyro: " ) );
-				lcd.setCursor( 0, 1 );
-				lcd.print( F( "OK to reset" ) );
-
-				while (1)
-				{
-					lcd.setCursor( 8, 0 );
-					float gyroData = readSensorData();
-					lcd.print( gyroData - SETTINGS.POSITION_OFFSET);
-
-
-					if (buttonOK.state() == 1)
-					{
-						SETTINGS.POSITION_OFFSET = gyroData;
-					}
-					else if (buttonESC.state())
-					{
-						break;
-					}
-				}
+				
 			}
 			else if (menuCurrentItem == 1)
 			{
-				lcd.print( F( "Update freq. ms" ) );
-				SETTINGS.GYRO_UPDATE_TIME = menuInner( SETTINGS.GYRO_UPDATE_TIME, 0, 1000, 1 );
-				continue;
+				
 			}
 
 		}
@@ -735,7 +691,7 @@ void menu_main()
 			//0
 			if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.print( F( "Gyroscope" ) );
+				lcd.print( F( "Sensors" ) );
 				lcd.setCursor( 3, 1 );
 				lcd.print( F( "Motor driver" ) );
 			}
@@ -865,10 +821,15 @@ void menu_main()
 	}
 }
 
-float readSensorData()
+bool getBikeAngle(float& angle)
 {
+	int16_t tfDist = 0;
+	if (tflI2C.getData( tfDist, LUNA_ADDRESS_1 ))
+		return 1;
+
 	return 0;
 }
+
 /*
 	Is stepper.distanceToGo() > 0 then only gyro and stepper.run part is running.
 	Display and user input not checked to make stepper run function have less delay.
@@ -884,7 +845,11 @@ void loop()
 	*/
 	if (millis() - gyroUpdate > SETTINGS.GYRO_UPDATE_TIME)
 	{
-		gyroVal = readSensorData() - SETTINGS.POSITION_OFFSET;
+		float angle = 0;
+		if (getBikeAngle( angle ))
+			gyroVal = angle;
+
+		//gyroVal = readSensorData() - SETTINGS.POSITION_OFFSET;
 		gyroUpdate = millis();
 	}
 
@@ -984,10 +949,6 @@ void loop()
 		mode = -1;
 		stepper.disableOutputs();
 	}
-	else if (buttonUp.state() == 2)
-	{
-		SETTINGS.POSITION_OFFSET = readSensorData();
-	}
 
 
 	/*
@@ -999,7 +960,7 @@ void loop()
 		lcd.clear();
 		lcd.setCursor( 0, 0 );
 
-		lcd.print( F( "Gyro: " ) );
+		lcd.print( F( "Status:" ) );
 		lcd.setCursor( 0, 1 );
 		if (mode == 0)
 			lcd.print( F( "OFF" ) );
@@ -1047,17 +1008,7 @@ void loop()
 	static unsigned long lastLogEvent = 0;
 	if (millis() - lastLogEvent > 500)
 	{
-		/* Display calibration status for each sensor. */
-		uint8_t system, gyro, accel, mag = 0;
-		bno.getCalibration( &system, &gyro, &accel, &mag );
-		Serial.print( "CALIBRATION: Sys=" );
-		Serial.print( system, DEC );
-		Serial.print( " Gyro=" );
-		Serial.print( gyro, DEC );
-		Serial.print( " Accel=" );
-		Serial.print( accel, DEC );
-		Serial.print( " Mag=" );
-		Serial.println( mag, DEC );
+		
 
 		lastLogEvent = millis();
 	}
