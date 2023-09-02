@@ -364,3 +364,4 @@ FodyWeavers.xsd
 /Motorcycle headlight/Motorcycle headlight.vcxproj
 /Motorcycle headlight/Motorcycle headlight.vcxproj.filters
 /Motorcycle headlight/__vm/*
+.vscode/arduino.json
