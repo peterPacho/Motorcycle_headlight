@@ -5,7 +5,7 @@
 #include <avr/eeprom.h>
 #include <TFLI2C.h>
 
-#define debug //comment out to disable debug/serial commands
+//#define debug //comment out to disable debug/serial commands
 
 /*
 	Arduino pin-out. SDA (white) - A4, SCL (yellow) - A5
@@ -832,9 +832,11 @@ void menu_main()
 bool getBikeAngle(float& angle)
 {
 	int16_t tfDist1 = 0, tfDist2 = 0;
-	if (tflI2C.getData( tfDist1, LUNA_ADDRESS_1 ) && tflI2C.getData( tfDist2, LUNA_ADDRESS_1 ))
+	if (tflI2C.getData( tfDist1, LUNA_ADDRESS_1 ) && tflI2C.getData( tfDist2, LUNA_ADDRESS_2 ))
 	{
-		return tfDist1 - tfDist2;
+		angle = round(float(tfDist1 - tfDist2) * -1.210 - -3.265);
+
+		return 1;
 	}
 
 	return 0;
@@ -857,8 +859,9 @@ void loop()
 	{
 		float angle = 0;
 		if (getBikeAngle( angle ))
+		{
 			gyroVal = angle;
-
+		}
 		//gyroVal = readSensorData() - SETTINGS.POSITION_OFFSET;
 		gyroUpdate = millis();
 	}
