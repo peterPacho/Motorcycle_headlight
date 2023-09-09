@@ -50,6 +50,7 @@ int mode = -1; //used in main loop to turn on/off gyro function
 #define DRIVER_MICROSTEPS 2
 #define STEPS_PER_REVOLUTION 3600 //used by the centering function
 #define STEPS_LIMIT 800	//How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
+#define SENSOR_HISTORY_SIZE 10 //takes average of this # of readings - for more stable value
 
 #define DEFAULT_SETTINGS { 2000,2000,1600,50,25,0, STEPS_LIMIT, 0,5 }
 
@@ -63,7 +64,7 @@ struct
 	int DRIVER_MAX_ACC;
 	int DRIVER_CURRENT;		//in mA?
 	int DISPLAY_BRIGHTNESS;	//0-255
-	int GYRO_UPDATE_TIME;		//in ms, how often to read data from the gyro
+	int SENSOR_UPDATE_TIME;		//in ms, how often to read data from the gyro
 	float POSITION_OFFSET;		//used to calibrate the center gyro position
 	int STEPS_LIMIT_ALLOWED;
 	int MOVE_THRESHOLD;			//how many steps off "correct" position before is starts moving
@@ -75,6 +76,8 @@ TMC2209Stepper TMCdriver( &SoftSerial, DRIVER_RSENSE, DRIVER_ADDRESS );
 AccelStepper stepper = AccelStepper( stepper.DRIVER, DRIVER_STEP, DRIVER_DIRECTION );
 LiquidCrystal_I2C lcd( 0x27, 16, 2 );
 TFLI2C tflI2C;
+float sensorHistory[SENSOR_HISTORY_SIZE];
+int sensorHistoryCounter = 0;
 
 //debouncing class for simple buttons, default for them is high (internal pull up)
 unsigned long lastButtonEvent;	//keeps time when was the button pressed last time
@@ -433,6 +436,9 @@ void setup()
 	}
 	digitalWrite( LUNA_ENABLE, 0 ); //enable the second luna
 
+	for(int i = 0; i < SENSOR_HISTORY_SIZE; i++)
+		sensorHistory[i] = 0;
+
 #ifdef debug
 	Serial.println( F( " done." ) );
 #endif
@@ -615,9 +621,8 @@ void menu_motorDriver()
 	}
 }
 
-void menu_gyroscope()
+void menu_sensor()
 {
-	return; //this menu disabled
 	int menuCurrentItem = 0;
 	const int menuItemsCount = 1; //increase when adding menu options
 	bool displayUpdate = true;
@@ -634,9 +639,9 @@ void menu_gyroscope()
 			//0
 			if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.print( F( "" ) );
+				lcd.print( F( "Raw distance" ) );
 				lcd.setCursor( 3, 1 );
-				lcd.print( F( "" ) );
+				lcd.print( F( "Update freq." ) );
 			}
 
 			//print selection arrow
@@ -669,11 +674,34 @@ void menu_gyroscope()
 
 			if (menuCurrentItem == 0)
 			{
+				lcd.clear();
+				lcd.setCursor(0,0);
+				lcd.print("Distance: ");
 				
+				unsigned long lastUpd = 0;
+				while(1)
+				{
+					if (millis() - lastUpd > SETTINGS.SENSOR_UPDATE_TIME)
+					{
+						lcd.setCursor(0,1);
+						lcd.print(F("          "));
+						lcd.setCursor(0,1);
+						float dist = 0;
+						if (getRawDistance(dist))
+							lcd.print(dist);
+
+						lastUpd = millis();
+					}
+
+					if (buttonESC.state())
+						break;
+				}
 			}
 			else if (menuCurrentItem == 1)
 			{
-				
+				lcd.print( F( "Update delay" ) );
+				SETTINGS.SENSOR_UPDATE_TIME = menuInner( SETTINGS.SENSOR_UPDATE_TIME, 0, 500, 1, 1 );
+				continue;
 			}
 
 		}
@@ -746,7 +774,7 @@ void menu_main()
 
 			if (menuCurrentItem == 0)
 			{
-				menu_gyroscope();
+				menu_sensor();
 				continue;
 			}
 			else if (menuCurrentItem == 1)
@@ -829,12 +857,54 @@ void menu_main()
 	}
 }
 
-bool getBikeAngle(float& angle)
+
+/*
+	Gets raw distance from the sensors.
+	Distance returned as reference parameters.
+	If distance measurement was successful returns true.
+*/
+bool getRawDistance(float& distance)
 {
 	int16_t tfDist1 = 0, tfDist2 = 0;
-	if (tflI2C.getData( tfDist1, LUNA_ADDRESS_1 ) && tflI2C.getData( tfDist2, LUNA_ADDRESS_2 ))
+	bool result = tflI2C.getData( tfDist1, LUNA_ADDRESS_1 ) && tflI2C.getData( tfDist2, LUNA_ADDRESS_2 );
+
+	if (result) 
 	{
-		angle = round(float(tfDist1 - tfDist2) * -1.210 - -3.265);
+		distance = tfDist1 - tfDist2;
+	}
+
+	return result;
+}
+
+
+/*
+	Calculates the angle of the bike.
+	Returns true if angle reading was successful.
+	Returns the angle by the reference parameter. 
+*/
+bool getBikeAngle(float& angle)
+{
+	float tempAngle = 0;
+	if (getRawDistance(tempAngle))
+	{
+		//got this function by measuring angle and the readout and doing the
+		//best function fit in Logger Pro
+		tempAngle = 38.43 * sin(0.01974 * tempAngle + 6.271) + 0.4739;
+
+
+		sensorHistory[sensorHistoryCounter] = tempAngle;
+		sensorHistoryCounter++;
+		if (sensorHistoryCounter >= SENSOR_HISTORY_SIZE) 
+			sensorHistoryCounter = 0;
+
+		//calculate average
+		tempAngle = 0;
+		for(int i = 0; i < SENSOR_HISTORY_SIZE; i++)
+		{
+			tempAngle += sensorHistory[i];
+		}
+
+		angle = tempAngle / SENSOR_HISTORY_SIZE;
 
 		return 1;
 	}
@@ -855,7 +925,7 @@ void loop()
 	/*
 		Update the gyro value.
 	*/
-	if (millis() - gyroUpdate > SETTINGS.GYRO_UPDATE_TIME)
+	if (millis() - gyroUpdate > SETTINGS.SENSOR_UPDATE_TIME)
 	{
 		float angle = 0;
 		if (getBikeAngle( angle ))
