@@ -3,12 +3,19 @@
 #include <AccelStepper.h>		// https://github.com/teemuatlut/TMCStepper/blob/master/examples/TMC_AccelStepper/TMC_AccelStepper.ino
 #include <LiquidCrystal_I2C.h>
 #include <avr/eeprom.h>
-#include <TFLI2C.h>
+#include <TFLI2C.h>				// https://github.com/budryerson/TFLuna-I2C
 
-//#define debug //comment out to disable debug/serial commands
+//comment out to disable log/debug/serial commands and reduce sketch size
+#define DEBUG_ON
 
 /*
-	Arduino pin-out. SDA (white) - A4, SCL (yellow) - A5
+	Comment out if uploading the sketch for the first time so
+	it writes default settings to the adruino's eeprom
+*/
+#define RESTORE_DEFAULT_SETTINGS
+
+/*
+	Arduino pin-out. SDA (white wire) - A4, SCL (yellow/green wire) - A5
 */
 #define DRIVER_ENABLE 9
 #define DRIVER_DIRECTION 10
@@ -16,28 +23,26 @@
 #define DRIVER_SWCLCK 4
 #define DRIVER_TX 6	//TX and RX must be swapped around
 #define DRIVER_RX 5
-#define HALL_SENSOR 12
+#define HALL_SENSOR 12 //sensor that detects the center position of the headlight
 #define BUTTON1 7
 #define BUTTON2 8
 #define BUTTON3 A1
 #define BUTTON4 A2
-#define LCD_BRIGHTNESS 11 //must be a PWM pin
-#define VOLTAGE_SENSE A0
-#define LUNA_ENABLE 2
-
-int mode = -1; //used in main loop to turn on/off gyro function
-
+#define LCD_BRIGHTNESS 11 //must be a PWM pin, used to set custom LCD brigtness that extends the build-in on/off
+#define VOLTAGE_SENSE A0 //connected to voltage divider and 12V input
+#define LUNA_ENABLE_RELAY 2	//pin that disables one of Luna modules so the address of the other one can be changed
 #define DRIVER_ADDRESS 0b00
 #define DRIVER_RSENSE 0.11f
 #define MPU 0x68
 #define LUNA_ADDRESS_1 0x10 //this must be the default luna address
-#define LUNA_ADDRESS_2 0x11
+#define LUNA_ADDRESS_2 0x11 //luna that is not connected through relay will have address changed to this value
 
 /*
 	Speeds to use for calibration function.
+	Calibration function doesn't use deceleration right now so keep max speed low.
 */
-#define DRIVER_MAX_SPEED_CALIBRATION 800
-#define DRIVER_MAX_ACC_CALIBRATION 800
+#define DRIVER_MAX_SPEED_CALIBRATION 700
+#define DRIVER_MAX_ACC_CALIBRATION 1000
 
 /*
 	With 72:8 gear ratio (9:1),
@@ -47,40 +52,100 @@ int mode = -1; //used in main loop to turn on/off gyro function
 
 	With microsteps set to 0, it takes 1800 steps for full rev.
 */
-#define DRIVER_MICROSTEPS 2
+#define DRIVER_MICROSTEPS 2		//to disable microsteps change this to 0
 #define STEPS_PER_REVOLUTION 3600 //used by the centering function
-#define STEPS_LIMIT 800	//How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
-#define SENSOR_HISTORY_SIZE 10 //takes average of this # of readings - for more stable value
+#define STEPS_LIMIT 800			//How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
+#define SENSOR_HISTORY_SIZE 10 	//takes average of this # of readings from the Lunas - for more stable value, using byte to keep track so range should be 2-255
+#define VOLTAGE_HISTORY_SIZE 10 //takes average of this # of readings from the analog pin to measure voltage
 
-#define DEFAULT_SETTINGS { 2000,2000,1600,50,25,0, STEPS_LIMIT, 0,5 }
-
-/*
-	The way to store/save settings like this it taken from
-	catalkn's post at https://forum.arduino.cc/t/how-to-save-configuration/45314/6
-*/
-struct
-{
-	int DRIVER_MAX_SPEED;	//in steps per second
-	int DRIVER_MAX_ACC;
-	int DRIVER_CURRENT;		//in mA?
-	int DISPLAY_BRIGHTNESS;	//0-255
-	int SENSOR_UPDATE_TIME;		//in ms, how often to read data from the gyro
-	float POSITION_OFFSET;		//used to calibrate the center gyro position
-	int STEPS_LIMIT_ALLOWED;
-	int MOVE_THRESHOLD;			//how many steps off "correct" position before is starts moving
-	int MOVE_THRESHOLD_CENTER; //how many steps off center before it starts moving
-} SETTINGS = DEFAULT_SETTINGS;
 
 SoftwareSerial SoftSerial( DRIVER_RX, DRIVER_TX );
 TMC2209Stepper TMCdriver( &SoftSerial, DRIVER_RSENSE, DRIVER_ADDRESS );
 AccelStepper stepper = AccelStepper( stepper.DRIVER, DRIVER_STEP, DRIVER_DIRECTION );
 LiquidCrystal_I2C lcd( 0x27, 16, 2 );
 TFLI2C tflI2C;
-float sensorHistory[SENSOR_HISTORY_SIZE];
-int sensorHistoryCounter = 0;
+
+
+/*
+	The idea to store/save settings like this it taken from
+	catalkn's post at https://forum.arduino.cc/t/how-to-save-configuration/45314/6
+
+	Remember to change the load functions and == operator overload if making changes to this struct.
+*/
+struct SETTINGS_S
+{
+	int DRIVER_MAX_SPEED = STEPS_PER_REVOLUTION / 4;	//in steps per second
+	int DRIVER_MAX_ACC = STEPS_PER_REVOLUTION / 4;
+	int DRIVER_CURRENT = 1000;		//in mA?
+	int DISPLAY_BRIGHTNESS = 100;	//0-255
+	int SENSOR_UPDATE_TIME = 25;		//in ms, how often to read data from the gyro
+	int STEPS_LIMIT_ALLOWED = STEPS_LIMIT;
+	int MOVE_THRESHOLD = 2;			//how many steps off "correct" position before is starts moving
+	int MOVE_THRESHOLD_CENTER = 5; //how many steps off center before it starts moving
+	char STARTUP_MODE = -1;			// what should be the mode after first start, -1 default, 0 or 1 will call calibration function
+} const DEFAULT_SETTINGS;
+
+SETTINGS_S SETTINGS = DEFAULT_SETTINGS;
+
+inline bool operator== (const SETTINGS_S& l, const SETTINGS_S& r)
+{
+	return l.DRIVER_MAX_SPEED == r.DRIVER_MAX_SPEED &&
+			l.DRIVER_MAX_ACC == r.DRIVER_MAX_ACC &&
+			l.DRIVER_CURRENT == r.DRIVER_CURRENT &&
+			l.DISPLAY_BRIGHTNESS == r.DISPLAY_BRIGHTNESS &&
+			l.SENSOR_UPDATE_TIME == r.SENSOR_UPDATE_TIME &&
+			l.STEPS_LIMIT_ALLOWED == r.STEPS_LIMIT_ALLOWED &&
+			l.MOVE_THRESHOLD == r.MOVE_THRESHOLD &&
+			l.MOVE_THRESHOLD_CENTER == r.MOVE_THRESHOLD_CENTER &&
+			l.STARTUP_MODE == r.STARTUP_MODE;
+}
+inline bool operator!= (const SETTINGS_S& l, const SETTINGS_S& r)
+{
+	return !(l == r);
+}
+void eeprom_write_block(const void*, void*, size_t); //defined so VS code doesn't complain
+void eeprom_read_block(void*, const void*, size_t);
+
+
+/*
+	If uploading the sketch first time call this function!
+	Don't enable the stepper driver or bad things might happen.
+*/
+void restoreDefaultSettings()
+{
+	SETTINGS = DEFAULT_SETTINGS;
+	TMCdriver.rms_current( SETTINGS.DRIVER_CURRENT );
+	stepper.setMaxSpeed( SETTINGS.DRIVER_MAX_SPEED );
+	stepper.setAcceleration( SETTINGS.DRIVER_MAX_ACC );
+	analogWrite( LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS );
+
+	saveSettings();
+}
+
+void loadSettings()
+{
+	eeprom_read_block( (void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
+
+	TMCdriver.rms_current( SETTINGS.DRIVER_CURRENT );
+	stepper.setMaxSpeed( SETTINGS.DRIVER_MAX_SPEED );
+	stepper.setAcceleration( SETTINGS.DRIVER_MAX_ACC );
+	analogWrite( LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS );
+}
+
+void saveSettings()
+{
+	SETTINGS_S SETTINGS_LOADED;
+	eeprom_read_block( (void*) &SETTINGS_LOADED, (void*) 0, sizeof( SETTINGS_LOADED ) );
+
+	//write to eeprom only if 
+	if (SETTINGS != SETTINGS_LOADED);
+		eeprom_write_block( (const void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
+}
+
+char mode = -1; //used in main loop to turn on/off gyro function
 
 //debouncing class for simple buttons, default for them is high (internal pull up)
-unsigned long lastButtonEvent;	//keeps time when was the button pressed last time
+unsigned long lastButtonEvent = 0;	//keeps time when was the button pressed last time
 class button
 {
 public:
@@ -161,7 +226,7 @@ button buttonDown( BUTTON1 );
 button buttonESC( BUTTON2 );
 
 
-#ifdef debug
+#ifdef DEBUG_ON
 /*
 	Taken from https://learn.adafruit.com/scanning-i2c-addresses/arduino
 */
@@ -206,7 +271,7 @@ void findDevices()
 
 
 /*
-	Processes the serial commands
+	Processes the serial commands for debugging
 */
 void serialCommands()
 {
@@ -275,8 +340,7 @@ void serialCommands()
 #endif
 
 /*
-	Finds the center / calibrates the stepper
-	using the hall sensor.
+	Finds the center / calibrates the stepper using the hall sensor.
 */
 void calibratePosition()
 {
@@ -383,14 +447,32 @@ void calibratePosition()
 	Those values were obtained by gathering data on different voltage levels and doing
 	the linear curve fit in LoggerPro. More accurate than calculating from resistor's values used and requires less brain power.
 */
-float voltMeter() { return (float) analogRead( VOLTAGE_SENSE ) * 0.02764 + 0.07088; }
+float voltMeter() 
+{ 
+	static byte voltageHistoryCounter = 0;
+	static int voltageHistory[VOLTAGE_HISTORY_SIZE] = {0};
+	
+	voltageHistory[voltageHistoryCounter++] = analogRead( VOLTAGE_SENSE );
+
+	unsigned long historySum = 0;
+	for(int i = 0; i < VOLTAGE_HISTORY_SIZE; i++)
+	{
+		historySum += voltageHistory[i];
+	}
+
+	return (float)(historySum/VOLTAGE_HISTORY_SIZE)  * 0.02764 + 0.07088;
+}
 
 
 void setup()
 {
+#ifdef RESTORE_DEFAULT_SETTINGS
+	restoreDefaultSettings();
+#endif
+
 	eeprom_read_block( (void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
 
-#ifdef debug
+#ifdef DEBUG_ON
 	Serial.begin( 115200 );
 	Serial.print( F( "Setup begin...  " ) );
 #endif
@@ -406,9 +488,12 @@ void setup()
 	pinMode( HALL_SENSOR, INPUT_PULLUP );
 	pinMode( VOLTAGE_SENSE, INPUT );
 
-	//disable one of the luna sensors
-	pinMode( LUNA_ENABLE, OUTPUT );
-	digitalWrite( LUNA_ENABLE, 1 ); //luna power connected to normally closed relay, so writing 1 opens the relay
+	/*
+		disable one of the luna sensors to change other luna's address
+		luna power connected to normally closed relay, so writing 1 opens the relay
+	*/
+	pinMode( LUNA_ENABLE_RELAY, OUTPUT );
+	digitalWrite( LUNA_ENABLE_RELAY, 1 );
 
 	TMCdriver.begin();
 	TMCdriver.rms_current( SETTINGS.DRIVER_CURRENT );
@@ -421,25 +506,26 @@ void setup()
 	stepper.disableOutputs();
 
 	lcd.begin();
-	lcd.noBacklight(); //as brightness is controlled by arduino
+	lcd.noBacklight(); //as brightness is controlled by arduino, LCD is modified to allow that
 	analogWrite( LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS );
 	lcd.clear();
 
-	//calibratePosition();
-	//mode = 0;
+	if (SETTINGS.STARTUP_MODE != -1)
+	{
+		calibratePosition();
+		mode = SETTINGS.STARTUP_MODE;
+	}
 
-	Wire.beginTransmission( LUNA_ADDRESS_1);
 	//if luna found on the default address, change it
+	//if arduino rebooted without power cycling luna, it won't respond to this address
+	Wire.beginTransmission( LUNA_ADDRESS_1);
 	if (Wire.endTransmission() == 0)
 	{
 		tflI2C.Set_I2C_Addr( LUNA_ADDRESS_2, LUNA_ADDRESS_1 );
 	}
-	digitalWrite( LUNA_ENABLE, 0 ); //enable the second luna
+	digitalWrite( LUNA_ENABLE_RELAY, 0 ); //enable the second luna
 
-	for(int i = 0; i < SENSOR_HISTORY_SIZE; i++)
-		sensorHistory[i] = 0;
-
-#ifdef debug
+#ifdef DEBUG_ON
 	Serial.println( F( " done." ) );
 #endif
 }
@@ -712,7 +798,7 @@ void menu_sensor()
 void menu_main()
 {
 	int menuCurrentItem = 0;
-	const int menuItemsCount = 5; //increase when adding menu options
+	const int menuItemsCount = 6; //increase when adding menu options
 	bool displayUpdate = true;
 
 	while (1)
@@ -723,25 +809,26 @@ void menu_main()
 			lcd.setCursor( 3, 0 );
 			int counter = 0;
 
-			//max string length = 13 because we also need 2 fields to print the arrow
+			//must have two spaces in front to make room for the arrow
 			//0
 			if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.print( F( "Sensors" ) );
-				lcd.setCursor( 3, 1 );
-				lcd.print( F( "Motor driver" ) );
+				lcd.println( F( "  Sensors" ) );
+				lcd.println( F( "  Motor driver" ) );
 			}
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.print( F( "Brightness" ) );		//2
-				lcd.setCursor( 3, 1 );
-				lcd.print( F( "Save settings" ) );		//3
+				lcd.println( F( "  Brightness" ) );		//2
+				lcd.println( F( "  Save settings" ) );		//3
 			}
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.print( F( "Load settings" ) );	//4
-				lcd.setCursor( 3, 1 );
-				lcd.print( F( "Restore def." ) );	//5
+				lcd.println( F( "  Load settings" ) );	//4
+				lcd.println( F( "  Restore def." ) );	//5
+			}
+			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
+			{
+				lcd.println(F("  Startup mode"));
 			}
 
 			//print selection arrow
@@ -829,27 +916,64 @@ void menu_main()
 			}
 			else if (menuCurrentItem == 3) //save
 			{
-				eeprom_write_block( (const void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
+				saveSettings();
 				continue;
 			}
 			else if (menuCurrentItem == 4) //load
 			{
-				eeprom_read_block( (void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
-
-				TMCdriver.rms_current( SETTINGS.DRIVER_CURRENT );
-				stepper.setMaxSpeed( SETTINGS.DRIVER_MAX_SPEED );
-				stepper.setAcceleration( SETTINGS.DRIVER_MAX_ACC );
-				analogWrite( LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS );
+				loadSettings();
 				continue;
 			}
 			else if (menuCurrentItem == 5) //default
 			{
-				SETTINGS = DEFAULT_SETTINGS;
-				TMCdriver.rms_current( SETTINGS.DRIVER_CURRENT );
-				stepper.setMaxSpeed( SETTINGS.DRIVER_MAX_SPEED );
-				stepper.setAcceleration( SETTINGS.DRIVER_MAX_ACC );
-				analogWrite( LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS );
-				eeprom_write_block( (const void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
+				restoreDefaultSettings();
+				continue;
+			}
+			else if (menuCurrentItem == 6) //startup mode
+			{
+				char defaultMode = SETTINGS.STARTUP_MODE;
+				char modeDisplayed = defaultMode + 1; //so it updates the display on the first run
+
+				while(1)
+				{					
+					if (defaultMode > 1) defaultMode = -1;
+					if (defaultMode < -1) defaultMode = 1;
+
+					if (defaultMode != modeDisplayed)
+					{
+						lcd.clear();
+						lcd.setCursor(0,0);
+						lcd.println(F("Startup mode: "));
+
+						if (defaultMode == -1)
+							lcd.print(F("Req.calibration"));
+						else if (defaultMode == 0)
+							lcd.print(F("Calib then OFF"));
+						else if (defaultMode == 1)
+							lcd.print(F("Calib then ON"));
+
+						modeDisplayed = defaultMode;
+					}
+
+					if (buttonUp.state() == 1)
+					{
+						defaultMode++;
+					}
+					if (buttonDown.state() == 1)
+					{
+						defaultMode--;
+					}
+					if (buttonESC.state())
+					{
+						break;
+					}
+					if (buttonOK.state() == 1)
+					{
+						SETTINGS.STARTUP_MODE = defaultMode;
+					}
+
+				}
+
 				continue;
 			}
 		}
@@ -884,13 +1008,15 @@ bool getRawDistance(float& distance)
 */
 bool getBikeAngle(float& angle)
 {
+	static float sensorHistory[SENSOR_HISTORY_SIZE] = {0};
+	static byte sensorHistoryCounter = 0;
 	float tempAngle = 0;
+
 	if (getRawDistance(tempAngle))
 	{
 		//got this function by measuring angle and the readout and doing the
 		//best function fit in Logger Pro
 		tempAngle = 38.43 * sin(0.01974 * tempAngle + 6.271) + 0.4739;
-
 
 		sensorHistory[sensorHistoryCounter] = tempAngle;
 		sensorHistoryCounter++;
@@ -915,34 +1041,36 @@ bool getBikeAngle(float& angle)
 /*
 	Is stepper.distanceToGo() > 0 then only gyro and stepper.run part is running.
 	Display and user input not checked to make stepper run function have less delay.
+
+	unsigned long variables usually used to keep track of time
 */
 void loop()
 {
-	static unsigned long gyroUpdate = 0;
-	static float gyroVal = 0;
-	static int previousTarget = 0;
+	static float bikeLeanAngle = 0;
+	static int previousTarget = 0; //what was the target stepper position
+
 
 	/*
-		Update the gyro value.
+		Update the sensors.
 	*/
-	if (millis() - gyroUpdate > SETTINGS.SENSOR_UPDATE_TIME)
+	static unsigned long lastSensorUpdate = 0;
+	if (millis() - lastSensorUpdate > SETTINGS.SENSOR_UPDATE_TIME)
 	{
 		float angle = 0;
 		if (getBikeAngle( angle ))
 		{
-			gyroVal = angle;
+			bikeLeanAngle = angle;
 		}
-		//gyroVal = readSensorData() - SETTINGS.POSITION_OFFSET;
-		gyroUpdate = millis();
+		lastSensorUpdate = millis();
 	}
 
 	/*
-		Gyro motor control.
+		Stepper motor control.
 	*/
 	if (mode == 1)
 	{
-		//gyroVal is in degrees off center
-		int newTarget = gyroVal * STEPS_PER_REVOLUTION / 4 / 90;
+		//bikeLeanAngle is in degrees off center
+		int newTarget = bikeLeanAngle * STEPS_PER_REVOLUTION / 4 / 90;
 
 		if (abs( newTarget ) < SETTINGS.MOVE_THRESHOLD_CENTER)
 		{
@@ -991,7 +1119,7 @@ void loop()
 		}
 		break;
 
-		//if button is held down
+		//if button is held down, recalibrate without changing the mode
 	case 2:
 		int modeSave = mode;
 
@@ -1012,8 +1140,6 @@ void loop()
 		return;
 	}
 
-	//allow to go to the menu only if gyro is not running
-	//as if gyro is running we don't reach this part of the program
 	if (buttonESC.state())
 	{
 		//if we were calibrated and possibly running, go back to the center before entering the menu
@@ -1037,8 +1163,8 @@ void loop()
 	/*
 		Update the display.
 	*/
-	static unsigned long displayUpdate = 0;
-	if (millis() - displayUpdate > 300)
+	static unsigned long lastDisplayUpdate = 0;
+	if (millis() - lastDisplayUpdate > 300)
 	{
 		lcd.clear();
 		lcd.setCursor( 0, 0 );
@@ -1075,18 +1201,18 @@ void loop()
 		lcd.print( F( "V" ) );
 
 		int printOffset = 0;
-		if (gyroVal < 0) printOffset--;
-		if (abs( gyroVal ) >= 10) printOffset--;
-		if (abs( gyroVal ) >= 100) printOffset--;
+		if (bikeLeanAngle < 0) printOffset--;
+		if (abs( bikeLeanAngle ) >= 10) printOffset--;
+		if (abs( bikeLeanAngle ) >= 100) printOffset--;
 
 		lcd.setCursor( printOffset + 12, 0 );
-		lcd.print( gyroVal );
+		lcd.print( bikeLeanAngle );
 
-		displayUpdate = millis();
+		lastDisplayUpdate = millis();
 	}
 
 
-#ifdef debug
+#ifdef DEBUG_ON
 	serialCommands();
 	static unsigned long lastLogEvent = 0;
 	if (millis() - lastLogEvent > 500)
