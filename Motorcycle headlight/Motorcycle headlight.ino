@@ -6,13 +6,13 @@
 #include <TFLI2C.h>				// https://github.com/budryerson/TFLuna-I2C
 
 //comment out to disable log/debug/serial commands and reduce sketch size
-#define DEBUG_ON
+//#define DEBUG_ON
 
 /*
 	Comment out if uploading the sketch for the first time so
 	it writes default settings to the adruino's eeprom
 */
-#define RESTORE_DEFAULT_SETTINGS
+//#define RESTORE_DEFAULT_SETTINGS
 
 /*
 	Arduino pin-out. SDA (white wire) - A4, SCL (yellow/green wire) - A5
@@ -69,8 +69,6 @@ TFLI2C tflI2C;
 /*
 	The idea to store/save settings like this it taken from
 	catalkn's post at https://forum.arduino.cc/t/how-to-save-configuration/45314/6
-
-	Remember to change the load functions and == operator overload if making changes to this struct.
 */
 struct SETTINGS_S
 {
@@ -86,26 +84,8 @@ struct SETTINGS_S
 } const DEFAULT_SETTINGS;
 
 SETTINGS_S SETTINGS = DEFAULT_SETTINGS;
-
-inline bool operator== (const SETTINGS_S& l, const SETTINGS_S& r)
-{
-	return l.DRIVER_MAX_SPEED == r.DRIVER_MAX_SPEED &&
-			l.DRIVER_MAX_ACC == r.DRIVER_MAX_ACC &&
-			l.DRIVER_CURRENT == r.DRIVER_CURRENT &&
-			l.DISPLAY_BRIGHTNESS == r.DISPLAY_BRIGHTNESS &&
-			l.SENSOR_UPDATE_TIME == r.SENSOR_UPDATE_TIME &&
-			l.STEPS_LIMIT_ALLOWED == r.STEPS_LIMIT_ALLOWED &&
-			l.MOVE_THRESHOLD == r.MOVE_THRESHOLD &&
-			l.MOVE_THRESHOLD_CENTER == r.MOVE_THRESHOLD_CENTER &&
-			l.STARTUP_MODE == r.STARTUP_MODE;
-}
-inline bool operator!= (const SETTINGS_S& l, const SETTINGS_S& r)
-{
-	return !(l == r);
-}
-void eeprom_write_block(const void*, void*, size_t); //defined so VS code doesn't complain
-void eeprom_read_block(void*, const void*, size_t);
-
+//void eeprom_update_block(const void*, void*, size_t); //defined so VS code doesn't complain
+//void eeprom_read_block(void*, const void*, size_t);
 
 /*
 	If uploading the sketch first time call this function!
@@ -134,12 +114,7 @@ void loadSettings()
 
 void saveSettings()
 {
-	SETTINGS_S SETTINGS_LOADED;
-	eeprom_read_block( (void*) &SETTINGS_LOADED, (void*) 0, sizeof( SETTINGS_LOADED ) );
-
-	//write to eeprom only if 
-	if (SETTINGS != SETTINGS_LOADED);
-		eeprom_write_block( (const void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
+	eeprom_update_block( (const void*) &SETTINGS, (void*) 0, sizeof( SETTINGS ) );
 }
 
 char mode = -1; //used in main loop to turn on/off gyro function
@@ -452,7 +427,9 @@ float voltMeter()
 	static byte voltageHistoryCounter = 0;
 	static int voltageHistory[VOLTAGE_HISTORY_SIZE] = {0};
 	
-	voltageHistory[voltageHistoryCounter++] = analogRead( VOLTAGE_SENSE );
+	voltageHistory[voltageHistoryCounter] = analogRead( VOLTAGE_SENSE );
+	voltageHistoryCounter++;
+	if (voltageHistoryCounter >= VOLTAGE_HISTORY_SIZE) voltageHistoryCounter = 0;
 
 	unsigned long historySum = 0;
 	for(int i = 0; i < VOLTAGE_HISTORY_SIZE; i++)
@@ -767,7 +744,7 @@ void menu_sensor()
 				unsigned long lastUpd = 0;
 				while(1)
 				{
-					if (millis() - lastUpd > SETTINGS.SENSOR_UPDATE_TIME)
+					if (millis() - lastUpd > 500)
 					{
 						lcd.setCursor(0,1);
 						lcd.print(F("          "));
@@ -809,26 +786,31 @@ void menu_main()
 			lcd.setCursor( 3, 0 );
 			int counter = 0;
 
-			//must have two spaces in front to make room for the arrow
+			//Up to 13 characters to make room for the arrow
 			//0
 			if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.println( F( "  Sensors" ) );
-				lcd.println( F( "  Motor driver" ) );
+				lcd.print( F( "Sensors" ) );
+				lcd.setCursor(3,1);
+				lcd.print( F( "Motor driver" ) );
 			}
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.println( F( "  Brightness" ) );		//2
-				lcd.println( F( "  Save settings" ) );		//3
+				lcd.print( F( "Brightness" ) );		//2
+				lcd.setCursor(3,1);
+				lcd.print( F( "Save settings" ) );		//3
 			}
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.println( F( "  Load settings" ) );	//4
-				lcd.println( F( "  Restore def." ) );	//5
+				lcd.print( F( "Load settings" ) );	//4
+				lcd.setCursor(3,1);
+				lcd.print( F( "Restore def." ) );	//5
 			}
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.println(F("  Startup mode"));
+				lcd.print(F("Startup mode"));
+				//lcd.setCursor(3,1);
+				//lcd.print(F(""));
 			}
 
 			//print selection arrow
@@ -943,7 +925,8 @@ void menu_main()
 					{
 						lcd.clear();
 						lcd.setCursor(0,0);
-						lcd.println(F("Startup mode: "));
+						lcd.print(F("Startup mode: "));
+						lcd.setCursor(0,1);
 
 						if (defaultMode == -1)
 							lcd.print(F("Req.calibration"));
@@ -970,6 +953,7 @@ void menu_main()
 					if (buttonOK.state() == 1)
 					{
 						SETTINGS.STARTUP_MODE = defaultMode;
+						break;
 					}
 
 				}
