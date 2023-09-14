@@ -422,22 +422,22 @@ void calibratePosition()
 	Those values were obtained by gathering data on different voltage levels and doing
 	the linear curve fit in LoggerPro. More accurate than calculating from resistor's values used and requires less brain power.
 */
-float voltMeter() 
-{ 
+float voltMeter()
+{
 	static byte voltageHistoryCounter = 0;
-	static int voltageHistory[VOLTAGE_HISTORY_SIZE] = {0};
-	
+	static int voltageHistory[VOLTAGE_HISTORY_SIZE] = { 0 };
+
 	voltageHistory[voltageHistoryCounter] = analogRead( VOLTAGE_SENSE );
 	voltageHistoryCounter++;
 	if (voltageHistoryCounter >= VOLTAGE_HISTORY_SIZE) voltageHistoryCounter = 0;
 
 	unsigned long historySum = 0;
-	for(int i = 0; i < VOLTAGE_HISTORY_SIZE; i++)
+	for (int i = 0; i < VOLTAGE_HISTORY_SIZE; i++)
 	{
 		historySum += voltageHistory[i];
 	}
 
-	return (float)(historySum/VOLTAGE_HISTORY_SIZE)  * 0.02764 + 0.07088;
+	return (float) (historySum / VOLTAGE_HISTORY_SIZE) * 0.02764 + 0.07088;
 }
 
 
@@ -495,7 +495,7 @@ void setup()
 
 	//if luna found on the default address, change it
 	//if arduino rebooted without power cycling luna, it won't respond to this address
-	Wire.beginTransmission( LUNA_ADDRESS_1);
+	Wire.beginTransmission( LUNA_ADDRESS_1 );
 	if (Wire.endTransmission() == 0)
 	{
 		tflI2C.Set_I2C_Addr( LUNA_ADDRESS_2, LUNA_ADDRESS_1 );
@@ -738,20 +738,20 @@ void menu_sensor()
 			if (menuCurrentItem == 0)
 			{
 				lcd.clear();
-				lcd.setCursor(0,0);
-				lcd.print("Distance: ");
-				
+				lcd.setCursor( 0, 0 );
+				lcd.print( "Distance: " );
+
 				unsigned long lastUpd = 0;
-				while(1)
+				while (1)
 				{
 					if (millis() - lastUpd > 500)
 					{
-						lcd.setCursor(0,1);
-						lcd.print(F("          "));
-						lcd.setCursor(0,1);
+						lcd.setCursor( 0, 1 );
+						lcd.print( F( "          " ) );
+						lcd.setCursor( 0, 1 );
 						float dist = 0;
-						if (getRawDistance(dist))
-							lcd.print(dist);
+						if (getRawDistance( dist ))
+							lcd.print( dist );
 
 						lastUpd = millis();
 					}
@@ -791,24 +791,24 @@ void menu_main()
 			if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
 				lcd.print( F( "Sensors" ) );
-				lcd.setCursor(3,1);
+				lcd.setCursor( 3, 1 );
 				lcd.print( F( "Motor driver" ) );
 			}
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
 				lcd.print( F( "Brightness" ) );		//2
-				lcd.setCursor(3,1);
+				lcd.setCursor( 3, 1 );
 				lcd.print( F( "Save settings" ) );		//3
 			}
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
 				lcd.print( F( "Load settings" ) );	//4
-				lcd.setCursor(3,1);
+				lcd.setCursor( 3, 1 );
 				lcd.print( F( "Restore def." ) );	//5
 			}
 			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
 			{
-				lcd.print(F("Startup mode"));
+				lcd.print( F( "Startup mode" ) );
 				//lcd.setCursor(3,1);
 				//lcd.print(F(""));
 			}
@@ -916,24 +916,24 @@ void menu_main()
 				char defaultMode = SETTINGS.STARTUP_MODE;
 				char modeDisplayed = defaultMode + 1; //so it updates the display on the first run
 
-				while(1)
-				{					
+				while (1)
+				{
 					if (defaultMode > 1) defaultMode = -1;
 					if (defaultMode < -1) defaultMode = 1;
 
 					if (defaultMode != modeDisplayed)
 					{
 						lcd.clear();
-						lcd.setCursor(0,0);
-						lcd.print(F("Startup mode: "));
-						lcd.setCursor(0,1);
+						lcd.setCursor( 0, 0 );
+						lcd.print( F( "Startup mode: " ) );
+						lcd.setCursor( 0, 1 );
 
 						if (defaultMode == -1)
-							lcd.print(F("Req.calibration"));
+							lcd.print( F( "Req.calibration" ) );
 						else if (defaultMode == 0)
-							lcd.print(F("Calib then OFF"));
+							lcd.print( F( "Calib then OFF" ) );
 						else if (defaultMode == 1)
-							lcd.print(F("Calib then ON"));
+							lcd.print( F( "Calib then ON" ) );
 
 						modeDisplayed = defaultMode;
 					}
@@ -971,12 +971,12 @@ void menu_main()
 	Distance returned as reference parameters.
 	If distance measurement was successful returns true.
 */
-bool getRawDistance(float& distance)
+bool getRawDistance( float& distance )
 {
 	int16_t tfDist1 = 0, tfDist2 = 0;
 	bool result = tflI2C.getData( tfDist1, LUNA_ADDRESS_1 ) && tflI2C.getData( tfDist2, LUNA_ADDRESS_2 );
 
-	if (result) 
+	if (result)
 	{
 		distance = tfDist1 - tfDist2;
 	}
@@ -988,28 +988,28 @@ bool getRawDistance(float& distance)
 /*
 	Calculates the angle of the bike.
 	Returns true if angle reading was successful.
-	Returns the angle by the reference parameter. 
+	Returns the angle by the reference parameter.
 */
-bool getBikeAngle(float& angle)
+bool getBikeAngle( float& angle )
 {
-	static float sensorHistory[SENSOR_HISTORY_SIZE] = {0};
+	static float sensorHistory[SENSOR_HISTORY_SIZE] = { 0 };
 	static byte sensorHistoryCounter = 0;
 	float tempAngle = 0;
 
-	if (getRawDistance(tempAngle))
+	if (getRawDistance( tempAngle ))
 	{
 		//got this function by measuring angle and the readout and doing the
 		//best function fit in Logger Pro
-		tempAngle = 38.43 * sin(0.01974 * tempAngle + 6.271) + 0.4739;
+		tempAngle = 38.43 * sin( 0.01974 * tempAngle + 6.271 ) + 0.4739;
 
 		sensorHistory[sensorHistoryCounter] = tempAngle;
 		sensorHistoryCounter++;
-		if (sensorHistoryCounter >= SENSOR_HISTORY_SIZE) 
+		if (sensorHistoryCounter >= SENSOR_HISTORY_SIZE)
 			sensorHistoryCounter = 0;
 
 		//calculate average
 		tempAngle = 0;
-		for(int i = 0; i < SENSOR_HISTORY_SIZE; i++)
+		for (int i = 0; i < SENSOR_HISTORY_SIZE; i++)
 		{
 			tempAngle += sensorHistory[i];
 		}
@@ -1201,7 +1201,7 @@ void loop()
 	static unsigned long lastLogEvent = 0;
 	if (millis() - lastLogEvent > 500)
 	{
-		
+
 
 		lastLogEvent = millis();
 	}
