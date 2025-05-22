@@ -42,7 +42,7 @@
 	Speeds to use for calibration function.
 	Calibration function doesn't use deceleration right now so keep max speed low.
 */
-#define DRIVER_MAX_SPEED_CALIBRATION 700
+#define DRIVER_MAX_SPEED_CALIBRATION 500
 #define DRIVER_MAX_ACC_CALIBRATION 1000
 
 /*
@@ -51,16 +51,12 @@
 	and microsteps set to 16
 	it takes 360 * 9 * 16 / 1.8 = 28800 steps for full rev.
 
-	With 130:10 / 13:1 gear ratio and 2 micro steps
-	= 5200
-
-	With microsteps set to 0, it takes 1800 steps for full rev.
+	With 130:10 / 13:1 gear ratio and 2 micro steps = 5200
+	With 120:12 and 2 micro steps = 4800
 */
-#define DRIVER_MICROSTEPS 2		  // to disable microsteps change this to 0
-#define STEPS_PER_REVOLUTION 5200 // used by the centering function
-#define STEPS_LIMIT 800			  // How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
-#define SENSOR_HISTORY_SIZE 10	  // takes average of this # of readings from the Lunas - for more stable value, using byte to keep track so range should be 2-255
-#define VOLTAGE_HISTORY_SIZE 10	  // takes average of this # of readings from the analog pin to measure voltage
+#define DRIVER_MICROSTEPS 2						  // to disable microsteps change this to 0
+#define STEPS_PER_REVOLUTION 4800				  // used by the centering function
+#define STEPS_LIMIT STEPS_PER_REVOLUTION / 2 - 10 // How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
 
 SoftwareSerial SoftSerial(DRIVER_RX, DRIVER_TX);
 TMC2209Stepper TMCdriver(&SoftSerial, DRIVER_RSENSE, DRIVER_ADDRESS);
@@ -80,9 +76,11 @@ struct SETTINGS_S
 	int DISPLAY_BRIGHTNESS = 100; // 0-255
 	int SENSOR_UPDATE_TIME = 25;  // in ms, how often to read data from the gyro
 	int STEPS_LIMIT_ALLOWED = STEPS_LIMIT;
-	int MOVE_THRESHOLD = 2;		   // how many steps off "correct" position before is starts moving
-	int MOVE_THRESHOLD_CENTER = 5; // how many steps off center before it starts moving
-	char STARTUP_MODE = -1;		   // what should be the mode after first start, -1 default, 0 or 1 will call calibration function
+	int MOVE_THRESHOLD = 2;					 // how many steps off "correct" position before is starts moving
+	int MOVE_THRESHOLD_CENTER = 5;			 // how many steps off center before it starts moving
+	char STARTUP_MODE = -1;					 // what should be the mode after first start, -1 default, 0 or 1 will call calibration function
+	float VOLTAGE_WEIGHTING_PARAMETER = 0.1; // to filter voltage readings
+	float SENSOR_WEIGHTING_PARAMETER = 0.1;	 // to filter LUNA readings
 } const DEFAULT_SETTINGS;
 
 SETTINGS_S SETTINGS = DEFAULT_SETTINGS;
@@ -423,21 +421,24 @@ void calibratePosition()
 */
 float voltMeter()
 {
-	static byte voltageHistoryCounter = 0;
-	static int voltageHistory[VOLTAGE_HISTORY_SIZE] = {0};
+	// static byte voltageHistoryCounter = 0;
+	// static int voltageHistory[VOLTAGE_HISTORY_SIZE] = {0};
 
-	voltageHistory[voltageHistoryCounter] = analogRead(VOLTAGE_SENSE);
-	voltageHistoryCounter++;
-	if (voltageHistoryCounter >= VOLTAGE_HISTORY_SIZE)
-		voltageHistoryCounter = 0;
+	// voltageHistory[voltageHistoryCounter] = analogRead(VOLTAGE_SENSE);
+	// voltageHistoryCounter++;
+	// if (voltageHistoryCounter >= VOLTAGE_HISTORY_SIZE)
+	// 	voltageHistoryCounter = 0;
 
-	unsigned long historySum = 0;
-	for (int i = 0; i < VOLTAGE_HISTORY_SIZE; i++)
-	{
-		historySum += voltageHistory[i];
-	}
+	// unsigned long historySum = 0;
+	// for (int i = 0; i < VOLTAGE_HISTORY_SIZE; i++)
+	// {
+	// 	historySum += voltageHistory[i];
+	// }
+	static float previousValue = 0;
+	float currentValue = (float)analogRead(VOLTAGE_SENSE) * 0.02764 + 0.0708;
+	previousValue = previousValue * (1 - SETTINGS.VOLTAGE_WEIGHTING_PARAMETER) + currentValue * SETTINGS.VOLTAGE_WEIGHTING_PARAMETER;
 
-	return (float)(historySum / VOLTAGE_HISTORY_SIZE) * 0.02764 + 0.07088;
+	return currentValue;
 }
 
 void setup()
@@ -705,8 +706,7 @@ bool getRawDistance(float &distance)
 */
 bool getBikeAngle(float &angle)
 {
-	static float sensorHistory[SENSOR_HISTORY_SIZE] = {0};
-	static byte sensorHistoryCounter = 0;
+	static float lastAngle = 0;
 	float tempAngle = 0;
 
 	if (getRawDistance(tempAngle))
@@ -714,20 +714,8 @@ bool getBikeAngle(float &angle)
 		// got this function by measuring angle and the readout and doing the
 		// best function fit in Logger Pro
 		tempAngle = 38.43 * sin(0.01974 * tempAngle + 6.271) + 0.4739;
-
-		sensorHistory[sensorHistoryCounter] = tempAngle;
-		sensorHistoryCounter++;
-		if (sensorHistoryCounter >= SENSOR_HISTORY_SIZE)
-			sensorHistoryCounter = 0;
-
-		// calculate average
-		tempAngle = 0;
-		for (int i = 0; i < SENSOR_HISTORY_SIZE; i++)
-		{
-			tempAngle += sensorHistory[i];
-		}
-
-		angle = tempAngle / SENSOR_HISTORY_SIZE;
+		lastAngle = tempAngle * SETTINGS.SENSOR_WEIGHTING_PARAMETER + lastAngle * (1 - SETTINGS.SENSOR_WEIGHTING_PARAMETER);
+		angle = lastAngle;
 
 		return 1;
 	}
@@ -1103,7 +1091,7 @@ void loop()
 		Update the sensors.
 	*/
 	static unsigned long lastSensorUpdate = 0;
-	if (millis() - lastSensorUpdate > SETTINGS.SENSOR_UPDATE_TIME)
+	if (millis() - lastSensorUpdate > (unsigned long)SETTINGS.SENSOR_UPDATE_TIME)
 	{
 		float angle = 0;
 		if (getBikeAngle(angle))
