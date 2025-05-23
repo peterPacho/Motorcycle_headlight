@@ -1,13 +1,12 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <TMCStepper.h>	  // https://github.com/teemuatlut/TMCStepper
-#include <AccelStepper.h> // https://github.com/teemuatlut/TMCStepper/blob/master/examples/TMC_AccelStepper/TMC_AccelStepper.ino
+#include <TMC5160.h> // https://github.com/tommag/TMC5160_Arduino/blob/master/examples/TMC5160_SPI/TMC5160_SPI.ino
 #include <LiquidCrystal_I2C.h>
 #include <avr/eeprom.h>
 #include <TFLI2C.h> // https://github.com/budryerson/TFLuna-I2C
 
 // comment out to disable log/debug/serial commands and reduce sketch size
-// #define DEBUG_ON
+#define DEBUG_ON
 
 /*
 	Comment out if uploading the sketch for the first time so
@@ -18,25 +17,24 @@
 /*
 	Arduino pin-out. SDA (white wire) - A4, SCL (yellow/green wire) - A5
 */
-#define DRIVER_ENABLE 9
-#define DRIVER_DIRECTION 10
-#define DRIVER_STEP 3
-#define DRIVER_SWCLCK 4
-#define DRIVER_TX 6 // TX and RX must be swapped around
-#define DRIVER_RX 5
-#define HALL_SENSOR 12 // sensor that detects the center position of the headlight
-#define BUTTON1 7
-#define BUTTON2 8
-#define BUTTON3 A1
-#define BUTTON4 A2
-#define LCD_BRIGHTNESS 11	// must be a PWM pin, used to set custom LCD brightness that extends the build-in on/off
-#define VOLTAGE_SENSE A0	// connected to voltage divider and 12V input
-#define LUNA_ENABLE_RELAY 2 // pin that disables one of Luna modules so the address of the other one can be changed
-#define DRIVER_ADDRESS 0b00
-#define DRIVER_RSENSE 0.11f
-#define MPU 0x68
-#define LUNA_ADDRESS_1 0x10 // this must be the default luna address
-#define LUNA_ADDRESS_2 0x11 // luna that is not connected through relay will have address changed to this value
+const uint8_t DRIVER_ENABLE = 9,
+			  DRIVER_MOSI = 11,
+			  DRIVER_SCK = 13,
+			  DRIVER_CS = 6,
+			  DRIVER_MISO = 12;
+
+const uint8_t BUTTON1 = 7,
+			  BUTTON2 = 8,
+			  BUTTON3 = A1,
+			  BUTTON4 = A2;
+
+const uint8_t HALL_SENSOR = 4, // sensor that detects the center position of the headlight, HIGH when no magnet, LOW when magnet nearby
+	LCD_BRIGHTNESS = 3,		   // must be a PWM pin, used to set custom LCD brightness that extends the build-in on/off
+	VOLTAGE_SENSE = A0;		   // connected to voltage divider and 12V input
+
+const uint8_t LUNA_ENABLE_RELAY = 2, // pin that disables one of Luna modules so the address of the other one can be changed
+	LUNA_ADDRESS_1 = 0x10,			 // this must be the default luna address
+	LUNA_ADDRESS_2 = 0x11;			 // luna that is not connected through relay will have address changed to this value
 
 /*
 	Speeds to use for calibration function.
@@ -58,9 +56,7 @@
 #define STEPS_PER_REVOLUTION 4800				  // used by the centering function
 #define STEPS_LIMIT STEPS_PER_REVOLUTION / 2 - 10 // How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
 
-SoftwareSerial SoftSerial(DRIVER_RX, DRIVER_TX);
-TMC2209Stepper TMCdriver(&SoftSerial, DRIVER_RSENSE, DRIVER_ADDRESS);
-AccelStepper stepper = AccelStepper(stepper.DRIVER, DRIVER_STEP, DRIVER_DIRECTION);
+TMC5160_SPI tmc = TMC5160_SPI(DRIVER_CS);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 TFLI2C tflI2C;
 
@@ -72,7 +68,7 @@ struct SETTINGS_S
 {
 	int DRIVER_MAX_SPEED = STEPS_PER_REVOLUTION / 4; // in steps per second
 	int DRIVER_MAX_ACC = STEPS_PER_REVOLUTION / 4;
-	int DRIVER_CURRENT = 1000;	  // in mA?
+	int DRIVER_CURRENT = 8;		  // 0-31 range, hold current will be half of this
 	int DISPLAY_BRIGHTNESS = 100; // 0-255
 	int SENSOR_UPDATE_TIME = 25;  // in ms, how often to read data from the gyro
 	int STEPS_LIMIT_ALLOWED = STEPS_LIMIT;
@@ -91,9 +87,9 @@ void loadSettings()
 {
 	eeprom_read_block((void *)&SETTINGS, (void *)0, sizeof(SETTINGS));
 
-	TMCdriver.rms_current(SETTINGS.DRIVER_CURRENT);
-	stepper.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED);
-	stepper.setAcceleration(SETTINGS.DRIVER_MAX_ACC);
+	// TMCdriver.rms_current(SETTINGS.DRIVER_CURRENT);
+	tmc.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED);
+	tmc.setAcceleration(SETTINGS.DRIVER_MAX_ACC);
 	analogWrite(LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS);
 }
 
@@ -109,9 +105,8 @@ void saveSettings()
 void restoreDefaultSettings()
 {
 	SETTINGS = DEFAULT_SETTINGS;
-	TMCdriver.rms_current(SETTINGS.DRIVER_CURRENT);
-	stepper.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED);
-	stepper.setAcceleration(SETTINGS.DRIVER_MAX_ACC);
+	tmc.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED);
+	tmc.setAcceleration(SETTINGS.DRIVER_MAX_ACC);
 	analogWrite(LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS);
 
 	saveSettings();
@@ -198,6 +193,12 @@ button buttonUp(BUTTON3);
 button buttonDown(BUTTON1);
 button buttonESC(BUTTON2);
 
+// to compare floats
+bool areEqual(float a, float b, float epsilon = 1e-6f)
+{
+	return abs(a - b) < epsilon;
+}
+
 #ifdef DEBUG_ON
 /*
 	Taken from https://learn.adafruit.com/scanning-i2c-addresses/arduino
@@ -244,173 +245,192 @@ void findDevices()
 /*
 	Processes the serial commands for debugging
 */
-void serialCommands()
-{
-	if (Serial.available())
-	{
-		String data = Serial.readString();
+// void serialCommands()
+// {
+// 	if (Serial.available())
+// 	{
+// 		String data = Serial.readString();
 
-		switch (data.charAt(0))
-		{
-		case 's':
-		{
-			int speed = data.substring(1).toInt();
+// 		switch (data.charAt(0))
+// 		{
+// 		case 's':
+// 		{
+// 			int speed = data.substring(1).toInt();
 
-			if (speed == 0)
-			{
-				stepper.disableOutputs();
-				Serial.println(F("Stepper disabled"));
-			}
-			else
-			{
-				Serial.print(F("Speed set to "));
-				Serial.println(speed);
-				stepper.enableOutputs();
-				stepper.setMaxSpeed(speed);
-			}
-			break;
-		}
+// 			if (speed == 0)
+// 			{
+// 				tmc.disable();
+// 				Serial.println(F("Stepper disabled"));
+// 			}
+// 			else
+// 			{
+// 				Serial.print(F("Speed set to "));
+// 				Serial.println(speed);
+// 				tmc.enable();
+// 				tmc.setMaxSpeed(speed);
+// 			}
+// 			break;
+// 		}
 
-		case 'p':
-		{
-			int position = data.substring(1).toInt();
-			Serial.print(F("Moving stepper to position "));
-			Serial.println(position);
-			stepper.moveTo(position);
-			break;
-		}
+// 		case 'p':
+// 		{
+// 			int position = data.substring(1).toInt();
+// 			Serial.print(F("Moving stepper to position "));
+// 			Serial.println(position);
+// 			tmc.setTargetPosition(position);
+// 			break;
+// 		}
 
-		case 'a':
-		{
-			int speed = data.substring(1).toInt();
+// 		case 'a':
+// 		{
+// 			int speed = data.substring(1).toInt();
 
-			Serial.print(F("Acceleration set to "));
-			Serial.println(speed);
-			stepper.enableOutputs();
-			stepper.setAcceleration(speed);
-			break;
-		}
+// 			Serial.print(F("Acceleration set to "));
+// 			Serial.println(speed);
+// 			stepper.enableOutputs();
+// 			stepper.setAcceleration(speed);
+// 			break;
+// 		}
 
-		case 'c':
-		{
-			calibratePosition();
-			break;
-		}
-		case 'd':
-		{
-			Serial.println(F("Stepper disabled."));
-			stepper.disableOutputs();
-			break;
-		}
-		default:
-			Serial.println(F("Unknown command!"));
-		}
-	}
-}
+// 		case 'c':
+// 		{
+// 			calibratePosition();
+// 			break;
+// 		}
+// 		case 'd':
+// 		{
+// 			Serial.println(F("Stepper disabled."));
+// 			stepper.disableOutputs();
+// 			break;
+// 		}
+// 		default:
+// 			Serial.println(F("Unknown command!"));
+// 		}
+// 	}
+// }
 
 #endif
 
 /*
+	Used for calibration only.
+	Blocks the execution until stepper reached the target.
+*/
+void tmcBlockingMove(float targetPosition, bool stopWhenReachedHallSensor = true, bool stopWhenPastHallSensor = false)
+{
+	while (true)
+	{
+		bool hallSensor = digitalRead(HALL_SENSOR);
+		if ((stopWhenPastHallSensor && !hallSensor) || (stopWhenReachedHallSensor && hallSensor) || areEqual(tmc.getCurrentPosition(), targetPosition))
+		{
+			tmc.stop();
+			return;
+		}
+	}
+}
+
+/*
 	Finds the center / calibrates the stepper using the hall sensor.
 */
+const float HALL_RANGE_GUESS = 0.04f; // ~4% of a full revolution
+const float BACKTRACK_IF_PAST_HALL = 0.3f;
+
+inline bool hallDetected()
+{
+	return digitalRead(HALL_SENSOR) == LOW;
+}
+void moveUntilHallDetected(float targetPos)
+{
+	tmc.setTargetPosition(targetPos);
+	while (!hallDetected() && !tmc.isTargetPositionReached())
+	{
+		// wait for motion
+	}
+	tmc.stop();
+}
+void moveUntilHallCleared(float targetPos)
+{
+	tmc.setTargetPosition(targetPos);
+	while (hallDetected() && !tmc.isTargetPositionReached())
+	{
+		// wait for motion
+	}
+	tmc.stop();
+}
+
 void calibratePosition()
 {
-	// setup
 	int direction = 1;
+	float position = 0;
+
 	lcd.clear();
 	lcd.setCursor(0, 0);
 	lcd.print(F("Calibrating"));
 	lcd.setCursor(4, 1);
 	lcd.print(F("position..."));
-	if (digitalRead(DRIVER_ENABLE))
+
+	tmc.enable();
+	delay(300);
+
+	tmc.setMaxSpeed(DRIVER_MAX_SPEED_CALIBRATION);
+	tmc.setAcceleration(DRIVER_MAX_ACC_CALIBRATION);
+
+	// Move to 0 if not already there
+	if (areEqual(tmc.getCurrentPosition(), 0))
 	{
-		stepper.enableOutputs();
-		delay(300);
-	}
-	stepper.setMaxSpeed(DRIVER_MAX_SPEED_CALIBRATION);
-	stepper.setAcceleration(DRIVER_MAX_ACC_CALIBRATION);
-
-	// if already calibrated before, move to 0 to reduce time
-	// if just started or already on 0 this function returns 0
-	if (stepper.currentPosition())
-	{
-		stepper.moveTo(0);
-		while (stepper.distanceToGo())
-			stepper.run();
-		// if moved to 0 but still didn't reach HALL (due to some missed steps??) go a bit further
-		if (digitalRead(HALL_SENSOR))
-			stepper.moveTo(STEPS_PER_REVOLUTION * 0.04);
-		while (stepper.distanceToGo())
-			stepper.run();
-	}
-
-	// arbitrary multiplier - want to move not more than less than 45 degrees
-	stepper.move(-STEPS_PER_REVOLUTION * 0.25);
-
-	while (stepper.distanceToGo() != 0 && digitalRead(HALL_SENSOR))
-	{
-		stepper.run();
-	}
-
-	stepper.setCurrentPosition(0);
-
-	//	if hall still reads high, we must be past it (and stalled on the end stop), so rotate back to the middle
-	if (digitalRead(HALL_SENSOR))
-	{
-		direction = -1; // set so next steps of finding the center accelerate in the same direction
-
-		stepper.move(STEPS_PER_REVOLUTION * 0.3);
-
-		while (stepper.distanceToGo() != 0 && digitalRead(HALL_SENSOR))
+		tmcBlockingMove(0, false);
+		if (!hallDetected())
 		{
-			stepper.run();
+			tmcBlockingMove(STEPS_PER_REVOLUTION * HALL_RANGE_GUESS);
 		}
 	}
 
-	stepper.setCurrentPosition(0);
+	// Sweep to find Hall sensor or end
+	position = direction * STEPS_PER_REVOLUTION * 0.25f;
+	moveUntilHallDetected(position);
+	tmc.setCurrentPosition(0); // define as 0 temporarily
 
-	// at this point we more or less should be in the middle
-	// hall should read 0
-	// so do small steps to actually find the middle
-	stepper.setMaxSpeed(DRIVER_MAX_SPEED_CALIBRATION / 4);
-	stepper.setAcceleration(DRIVER_MAX_ACC_CALIBRATION / 2);
-
-	// again arbitrary multiplier - too small and we don't reach other side of the magnet
-	stepper.move(-STEPS_PER_REVOLUTION * 0.04 * direction);
-
-	while (stepper.distanceToGo() != 0 && !digitalRead(HALL_SENSOR))
+	// If still no detection, backtrack
+	if (!hallDetected())
 	{
-		stepper.run();
+		direction *= -1;
+		tmcBlockingMove(STEPS_PER_REVOLUTION * BACKTRACK_IF_PAST_HALL);
 	}
 
-	// reached some point where hall no longer reads 0
-	// reset position to 0
-	// move in other direction until hall reads 0 and then reads 1 again
+	tmc.setCurrentPosition(0); // Ensure zeroed
 
-	stepper.setCurrentPosition(0);
-	stepper.move(STEPS_PER_REVOLUTION * 0.04 * direction);
+	// Lower speed for fine calibration
+	tmc.setMaxSpeed(DRIVER_MAX_SPEED_CALIBRATION / 4);
+	tmc.setAcceleration(DRIVER_MAX_ACC_CALIBRATION / 2);
 
-	while (stepper.distanceToGo() != 0 && digitalRead(HALL_SENSOR))
-	{
-		stepper.run();
-	}
-	while (stepper.distanceToGo() != 0 && !digitalRead(HALL_SENSOR))
-	{
-		stepper.run();
-	}
+	// Step 1: Move until Hall clears
+	float travel = STEPS_PER_REVOLUTION * HALL_RANGE_GUESS * direction;
+	moveUntilHallCleared(travel);
 
-	// go back to the previous settings
-	stepper.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED);
-	stepper.setAcceleration(SETTINGS.DRIVER_MAX_ACC);
+	// Step 2: Reverse and move until Hall is detected again
+	direction *= -1;
+	tmc.setCurrentPosition(0);
+	travel = STEPS_PER_REVOLUTION * HALL_RANGE_GUESS * direction;
+	moveUntilHallDetected(travel);
 
-	// now reached other side of the hall range, so actual middle position is somewhere in between
-	stepper.moveTo(stepper.currentPosition() / 2);
+	float firstEdge = tmc.getCurrentPosition();
 
-	while (stepper.distanceToGo() != 0)
-		stepper.run();
+	// Step 3: Continue until Hall clears again
+	moveUntilHallCleared(firstEdge + STEPS_PER_REVOLUTION * HALL_RANGE_GUESS * direction);
 
-	// now we are in the actual middle position
-	stepper.setCurrentPosition(0);
+	// Step 4: Reverse again and detect second edge
+	direction *= -1;
+	moveUntilHallDetected(tmc.getCurrentPosition() + STEPS_PER_REVOLUTION * HALL_RANGE_GUESS * direction);
+
+	float secondEdge = tmc.getCurrentPosition();
+
+	// Step 5: Move to center between edges
+	float centerPos = (firstEdge + secondEdge) / 2.0f;
+	tmcBlockingMove(centerPos, false, false);
+
+	// Finalize
+	tmc.setCurrentPosition(0);
+	tmc.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED);
+	tmc.setAcceleration(SETTINGS.DRIVER_MAX_ACC);
 
 	lcd.clear();
 }
@@ -453,15 +473,12 @@ void setup()
 	Serial.begin(115200);
 	Serial.print(F("Setup begin...  "));
 #endif
-	SoftSerial.begin(9600);
-	TMCdriver.beginSerial(9600);
-
 	Wire.begin();
+	SPI.begin();
 
 	digitalWrite(DRIVER_ENABLE, HIGH);
 	pinMode(DRIVER_ENABLE, OUTPUT);
-	pinMode(DRIVER_DIRECTION, OUTPUT);
-	pinMode(DRIVER_STEP, OUTPUT);
+
 	pinMode(HALL_SENSOR, INPUT_PULLUP);
 	pinMode(VOLTAGE_SENSE, INPUT);
 
@@ -472,15 +489,18 @@ void setup()
 	pinMode(LUNA_ENABLE_RELAY, OUTPUT);
 	digitalWrite(LUNA_ENABLE_RELAY, 1);
 
-	TMCdriver.begin();
-	TMCdriver.rms_current(SETTINGS.DRIVER_CURRENT);
-	TMCdriver.pwm_autoscale(1);
-	TMCdriver.microsteps(DRIVER_MICROSTEPS);
-	stepper.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED);
-	stepper.setAcceleration(SETTINGS.DRIVER_MAX_ACC);
-	stepper.setEnablePin(DRIVER_ENABLE);
-	stepper.setPinsInverted(false, false, true);
-	stepper.disableOutputs();
+	// TMC driver - setup follows the SPI example from github
+	TMC5160::PowerStageParameters powerStageParams; // defaults.
+	TMC5160::MotorParameters motorParams;
+	motorParams.globalScaler = 98; // Adapt to your driver and motor (check TMC5160 datasheet - "Selecting sense resistors")
+	motorParams.irun = SETTINGS.DRIVER_CURRENT;
+	motorParams.ihold = SETTINGS.DRIVER_CURRENT / 2;
+
+	tmc.begin(powerStageParams, motorParams, TMC5160::NORMAL_MOTOR_DIRECTION);
+
+	tmc.setRampMode(TMC5160::POSITIONING_MODE);
+	tmc.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED);
+	tmc.setAcceleration(SETTINGS.DRIVER_MAX_ACC);
 
 	lcd.init();
 	lcd.noBacklight(); // as brightness is controlled by arduino, LCD is modified to allow that
@@ -642,21 +662,20 @@ void menu_motorDriver()
 			{
 				lcd.print(F("Max speed"));
 				SETTINGS.DRIVER_MAX_SPEED = menuInner(SETTINGS.DRIVER_MAX_SPEED, 0, 5000, 1, 10);
-				stepper.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED);
+				tmc.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED);
 				continue;
 			}
 			else if (menuCurrentItem == 1)
 			{
 				lcd.print(F("Acceleration"));
 				SETTINGS.DRIVER_MAX_ACC = menuInner(SETTINGS.DRIVER_MAX_ACC, 0, 8000, 1, 10);
-				stepper.setAcceleration(SETTINGS.DRIVER_MAX_ACC);
+				tmc.setAcceleration(SETTINGS.DRIVER_MAX_ACC);
 				continue;
 			}
 			else if (menuCurrentItem == 2)
 			{
-				lcd.print(F("Driver current"));
+				lcd.print(F("I. Restart req!"));
 				SETTINGS.DRIVER_CURRENT = menuInner(SETTINGS.DRIVER_CURRENT, 0, 2000, 1, 10);
-				TMCdriver.rms_current(SETTINGS.DRIVER_CURRENT);
 				continue;
 			}
 			else if (menuCurrentItem == 3)
@@ -840,22 +859,14 @@ void menu_test()
 
 		if (buttonESC.state())
 		{
-			stepper.disableOutputs();
+			tmc.stop();
 			break;
 		}
 		else if (buttonOK.state() == 1)
 		{
-			stepper.moveTo(sweepSteps);
-			while (stepper.distanceToGo())
-				stepper.run();
-
-			stepper.moveTo(-sweepSteps);
-			while (stepper.distanceToGo())
-				stepper.run();
-
-			stepper.moveTo(0);
-			while (stepper.distanceToGo())
-				stepper.run();
+			tmcBlockingMove(sweepSteps, false, false);
+			tmcBlockingMove(-sweepSteps, false, false);
+			tmcBlockingMove(0, false, false);
 		}
 		else if (buttonUp.state())
 		{
@@ -1113,7 +1124,7 @@ void loop()
 		{
 			newTarget = 0;
 			previousTarget = 0;
-			stepper.moveTo(0);
+			tmc.setTargetPosition(0);
 		}
 		else if (abs(newTarget - previousTarget) > SETTINGS.MOVE_THRESHOLD)
 		{
@@ -1122,13 +1133,11 @@ void loop()
 			else if (newTarget < -SETTINGS.STEPS_LIMIT_ALLOWED)
 				newTarget = -SETTINGS.STEPS_LIMIT_ALLOWED;
 
-			stepper.moveTo(newTarget);
+			tmc.setTargetPosition(newTarget);
 
 			previousTarget = newTarget;
 		}
 	}
-
-	stepper.run();
 
 	/*
 		Check for user input.
@@ -1152,7 +1161,7 @@ void loop()
 
 			if (!mode)
 			{
-				stepper.moveTo(0);
+				tmc.setTargetPosition(0);
 				previousTarget = 0;
 			}
 		}
@@ -1172,22 +1181,15 @@ void loop()
 		break;
 	}
 
-	// if stepper not in target position don't run rest of the function.
-	// less important parts after this step
-	if (stepper.distanceToGo())
-	{
-		return;
-	}
-
 	if (buttonESC.state())
 	{
 		// if we were calibrated and possibly running, go back to the center before entering the menu
 		if (mode != -1)
-			stepper.moveTo(0);
-		while (stepper.distanceToGo())
-			stepper.run();
+		{
+			tmcBlockingMove(0, false, false);
+		}
 
-		stepper.disableOutputs();
+		tmc.stop();
 		mode = -1;
 		menu_main();
 		return;
@@ -1195,7 +1197,7 @@ void loop()
 	else if (buttonDown.state() == 2)
 	{
 		mode = -1;
-		stepper.disableOutputs();
+		tmc.stop();
 	}
 
 	/*
@@ -1254,7 +1256,7 @@ void loop()
 	}
 
 #ifdef DEBUG_ON
-	serialCommands();
+	// serialCommands();
 	static unsigned long lastLogEvent = 0;
 	if (millis() - lastLogEvent > 500)
 	{
