@@ -7,7 +7,7 @@
 #include <TFLI2C.h> // https://github.com/budryerson/TFLuna-I2C
 
 // comment out to disable log/debug/serial commands and reduce sketch size
-#define DEBUG_ON
+// #define DEBUG_ON
 
 /*
 	Comment out if uploading the sketch for the first time so
@@ -18,21 +18,23 @@
 /*
 	Arduino pin-out. SDA (white wire) - A4, SCL (yellow/green wire) - A5
 */
-#define DRIVER_ENABLE 9
-#define DRIVER_DIRECTION 10
-#define DRIVER_STEP 13
-#define DRIVER_SWCLCK 11
-#define DRIVER_TX 6 // TX and RX must be swapped around
-#define DRIVER_RX 12
+const uint8_t
+	DRIVER_ENABLE = 9,
+	DRIVER_DIRECTION = 10,
+	DRIVER_STEP = 13,
+	DRIVER_SWCLCK = 11,
+	DRIVER_TX = 6,
+	DRIVER_RX = 12,
 
-#define HALL_SENSOR 4 // sensor that detects the center position of the headlight
-#define BUTTON1 7
-#define BUTTON2 8
-#define BUTTON3 A1
-#define BUTTON4 A2
-#define LCD_BRIGHTNESS 3	// must be a PWM pin, used to set custom LCD brightness that extends the build-in on/off
-#define VOLTAGE_SENSE A0	// connected to voltage divider and 12V input
-#define LUNA_ENABLE_RELAY 2 // pin that disables one of Luna modules so the address of the other one can be changed
+	HALL_SENSOR = 4, // sensor that detects the center position of the headlight
+	BUTTON1 = 7,
+	BUTTON2 = 8,
+	BUTTON3 = A1,
+	BUTTON4 = A2,
+	LCD_BRIGHTNESS = 3,	   // must be a PWM pin, used to set custom LCD brightness that extends the build-in on/off
+	VOLTAGE_SENSE = A0,	   // connected to voltage divider and 12V input
+	LUNA_ENABLE_RELAY = 2; // pin that disables one of Luna modules so the address of the other one can be changed
+
 #define DRIVER_ADDRESS 0b00
 #define DRIVER_RSENSE 0.11f
 #define MPU 0x68
@@ -51,13 +53,6 @@
 #define DRIVER_MICROSTEPS 0					  // to disable microsteps change this to 0
 #define STEPS_PER_REVOLUTION 2400			  // used by the centering function
 #define STEPS_LIMIT STEPS_PER_REVOLUTION * .2 // How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
-
-/*
-	Speeds to use for calibration function.
-	Calibration function doesn't use deceleration right now so keep max speed low.
-*/
-#define DRIVER_MAX_SPEED_CALIBRATION STEPS_PER_REVOLUTION / 10
-#define DRIVER_MAX_ACC_CALIBRATION STEPS_PER_REVOLUTION / 10
 
 SoftwareSerial SoftSerial(DRIVER_RX, DRIVER_TX);
 TMC2209Stepper TMCdriver(&SoftSerial, DRIVER_RSENSE, DRIVER_ADDRESS);
@@ -206,6 +201,7 @@ void calibratePosition()
 {
 	// setup
 	int direction = 1;
+
 	lcd.clear();
 	lcd.setCursor(0, 0);
 	lcd.print(F("Calibrating"));
@@ -216,8 +212,8 @@ void calibratePosition()
 		stepper.enableOutputs();
 		delay(300);
 	}
-	stepper.setMaxSpeed(DRIVER_MAX_SPEED_CALIBRATION);
-	stepper.setAcceleration(DRIVER_MAX_ACC_CALIBRATION);
+	stepper.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED / 3);
+	stepper.setAcceleration(SETTINGS.DRIVER_MAX_ACC / 3);
 
 	// if already calibrated before, move to 0 to reduce time
 	// if just started or already on 0 this function returns 0
@@ -246,7 +242,7 @@ void calibratePosition()
 	//	if hall still reads high, we must be past it (and stalled on the end stop), so rotate back to the middle
 	if (digitalRead(HALL_SENSOR))
 	{
-		direction = -1; // set so next steps of finding the center accelerate in the same direction
+		direction = direction * -1; // set so next steps of finding the center accelerate in the same direction
 
 		stepper.move(STEPS_PER_REVOLUTION * 0.3);
 
@@ -261,8 +257,8 @@ void calibratePosition()
 	// at this point we more or less should be in the middle
 	// hall should read 0
 	// so do small steps to actually find the middle
-	stepper.setMaxSpeed(DRIVER_MAX_SPEED_CALIBRATION / 4);
-	stepper.setAcceleration(DRIVER_MAX_ACC_CALIBRATION / 2);
+	stepper.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED / 6);
+	stepper.setAcceleration(SETTINGS.DRIVER_MAX_ACC / 6);
 
 	// again arbitrary multiplier - too small and we don't reach other side of the magnet
 	stepper.move(-STEPS_PER_REVOLUTION * 0.04 * direction);
@@ -705,23 +701,15 @@ bool getRawDistance(float &distance)
 	Returns true if angle reading was successful.
 	Returns the angle by the reference parameter.
 */
-bool getBikeAngle(float &angle)
+float getBikeAngle(uint16_t lunaDiff)
 {
 	static float lastAngle = 0;
-	float tempAngle = 0;
 
-	if (getRawDistance(tempAngle))
-	{
-		// got this function by measuring angle and the readout and doing the
-		// best function fit in Logger Pro
-		tempAngle = 38.43 * sin(0.01974 * tempAngle + 6.271) + 0.4739;
-		lastAngle = tempAngle * SETTINGS.SENSOR_WEIGHTING_PARAMETER + lastAngle * (1 - SETTINGS.SENSOR_WEIGHTING_PARAMETER);
-		angle = lastAngle;
-
-		return 1;
-	}
-
-	return 0;
+	// got this function by measuring angle and the readout and doing the
+	// best function fit in Logger Pro
+	lunaDiff = 38.43 * sin(0.01974 * lunaDiff + 6.271) + 0.4739;
+	lastAngle = lunaDiff * SETTINGS.SENSOR_WEIGHTING_PARAMETER + lastAngle * (1 - SETTINGS.SENSOR_WEIGHTING_PARAMETER);
+	return lastAngle;
 }
 
 void menu_sensor()
@@ -1086,12 +1074,14 @@ void menu_main()
 void loop()
 {
 	/*
-
+		Reading one luna takes ~3ms, so it should reliably make up to
+		~330 steps before reading the lunas will take too long and might
+		cause step skipping. So if above that speed, ignore sensors for now.
 	*/
 	do
 	{
 		stepper.run();
-	} while (abs(stepper.speed()) > 166);
+	} while (abs(stepper.speed()) > 330);
 
 #ifdef DEBUG_ON
 	serialCommands();
@@ -1114,11 +1104,15 @@ void loop()
 	static unsigned long lastSensorUpdate = 0;
 	if (millis() - lastSensorUpdate > (unsigned long)SETTINGS.SENSOR_UPDATE_TIME)
 	{
-		float angle = 0;
-		if (getBikeAngle(angle))
+		int16_t tfDist1 = 0, tfDist2 = 0;
+		bool result = tflI2C.getData(tfDist1, LUNA_ADDRESS_1) && tflI2C.getData(tfDist2, LUNA_ADDRESS_2);
+
+		if (result)
 		{
-			bikeLeanAngle = angle;
+			tfDist1 = tfDist1 - tfDist2;
+			bikeLeanAngle = getBikeAngle(tfDist1);
 		}
+
 		lastSensorUpdate = millis();
 	}
 
