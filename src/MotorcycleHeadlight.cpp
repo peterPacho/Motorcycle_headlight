@@ -67,9 +67,9 @@ TFLI2C tflI2C;
 */
 struct SETTINGS_S
 {
-	int DRIVER_MAX_SPEED = STEPS_PER_REVOLUTION / 4; // in steps per second
-	int DRIVER_MAX_ACC = STEPS_PER_REVOLUTION / 4;	 // in steps per second
-	int DRIVER_CURRENT = 1000;						 // in mA?
+	int DRIVER_MAX_SPEED = STEPS_PER_REVOLUTION / 4; // in steps per second, with 2A and 120:20 gear ratio, this should be ~500
+	int DRIVER_MAX_ACC = STEPS_PER_REVOLUTION / 4;	 // in steps per second, with 2A and 120:20 gear ratio, this should be ~1500
+	int DRIVER_CURRENT = 1000;						 // in mA?, bigger nema should be fine at 2A
 	int DISPLAY_BRIGHTNESS = 100;					 // 0-255
 	int SENSOR_UPDATE_TIME = 25;					 // in ms, how often to read data from the lunas
 	int STEPS_LIMIT_ALLOWED = STEPS_LIMIT;			 // STEPS_LIMIT sets how many steps are allowed by hardware (physical stop), this limits it further
@@ -664,7 +664,7 @@ void menu_motorDriver()
 			else if (menuCurrentItem == 2)
 			{
 				lcd.print(F("Driver current"));
-				SETTINGS.DRIVER_CURRENT = menuInner(SETTINGS.DRIVER_CURRENT, 0, 2000, 1, 10);
+				SETTINGS.DRIVER_CURRENT = menuInner(SETTINGS.DRIVER_CURRENT, 0, 3000, 1, 10);
 				TMCdriver.rms_current(SETTINGS.DRIVER_CURRENT);
 				continue;
 			}
@@ -796,10 +796,16 @@ void menu_sensor()
 				{
 					if (millis() - lastUpd > 500)
 					{
+						int16_t tfDist1 = 0, tfDist2 = 0;
+						tflI2C.getData(tfDist1, LUNA_ADDRESS_1);
+						tflI2C.getData(tfDist2, LUNA_ADDRESS_2);
+
 						lcd.setCursor(0, 1);
 						lcd.print(F("          "));
 						lcd.setCursor(0, 1);
-						lcd.print(getRawDistance());
+						lcd.print(tfDist1);
+						lcd.print(F(", "));
+						lcd.print(tfDist2);
 
 						lastUpd = millis();
 					}
@@ -817,13 +823,13 @@ void menu_sensor()
 			else if (menuCurrentItem == 2)
 			{
 				lcd.print(F("V weight param"));
-				SETTINGS.VOLTAGE_WEIGHTING_PARAMETER = menuInner(SETTINGS.VOLTAGE_WEIGHTING_PARAMETER * 100, 0, 100, 1, 1) / 100;
+				SETTINGS.VOLTAGE_WEIGHTING_PARAMETER = 0.01f * menuInner(SETTINGS.VOLTAGE_WEIGHTING_PARAMETER * 100, 0, 100, 1, 1);
 				continue;
 			}
 			else if (menuCurrentItem == 3)
 			{
 				lcd.print(F("Luna w. param"));
-				SETTINGS.SENSOR_WEIGHTING_PARAMETER = menuInner(SETTINGS.SENSOR_WEIGHTING_PARAMETER * 100, 0, 100, 1, 1) / 100;
+				SETTINGS.SENSOR_WEIGHTING_PARAMETER = 0.01f * menuInner(SETTINGS.SENSOR_WEIGHTING_PARAMETER * 100, 0, 100, 1, 1);
 				continue;
 			}
 		}
@@ -834,6 +840,25 @@ void menu_sensor()
 	Test menu is used to move the headlight to test for binding /
 	acceleration / speed problems.
 */
+void _menu_test_run_stepper(int targetPos)
+{
+	stepper.moveTo(targetPos);
+	int16_t dist;
+	while (stepper.distanceToGo())
+	{
+		do
+		{
+			stepper.run();
+		} while (abs(stepper.speed()) > SETTINGS.SPEED_THRESHOLD);
+
+		delay(4);
+		// tflI2C.getData(dist, LUNA_ADDRESS_1);
+
+		stepper.run();
+		delay(4);
+		// tflI2C.getData(dist, LUNA_ADDRESS_2);
+	}
+}
 void menu_test()
 {
 
@@ -863,20 +888,6 @@ void menu_test()
 			stepper.disableOutputs();
 			break;
 		}
-		else if (buttonOK.state() == 1)
-		{
-			stepper.moveTo(sweepSteps);
-			while (stepper.distanceToGo())
-				stepper.run();
-
-			stepper.moveTo(-sweepSteps);
-			while (stepper.distanceToGo())
-				stepper.run();
-
-			stepper.moveTo(0);
-			while (stepper.distanceToGo())
-				stepper.run();
-		}
 		else if (buttonUp.state())
 		{
 			sweepSteps += 10;
@@ -888,6 +899,27 @@ void menu_test()
 			sweepSteps -= 10;
 			if (sweepSteps < 0)
 				sweepSteps = 0;
+		}
+		else
+		{
+			bool testUntilFail = false;
+
+			switch (buttonOK.state())
+			{
+			case 2:
+				testUntilFail = true;
+			case 1:
+				do
+				{
+					_menu_test_run_stepper(sweepSteps);
+					_menu_test_run_stepper(-sweepSteps);
+					_menu_test_run_stepper(0);
+				} while (testUntilFail && !digitalRead(HALL_SENSOR) && !buttonESC.state());
+				break;
+
+			default:
+				break;
+			}
 		}
 	}
 }
@@ -1150,6 +1182,7 @@ void loop()
 	/*
 		Reading second luna
 	*/
+	// unsigned long start = micros(), end;
 	if (updateLunas)
 	{
 		lunaReadingResult = lunaReadingResult && tflI2C.getData(lunaDist2, LUNA_ADDRESS_2);
@@ -1188,6 +1221,10 @@ void loop()
 			previousTarget = newTarget;
 		}
 	}
+	// end = micros();
+	// end = end - start;
+	// if (end > 100)
+	// 	Serial.println(end);
 
 	// if stepper not in target position don't run rest of the function.
 	// less important parts after this step
