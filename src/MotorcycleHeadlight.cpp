@@ -49,8 +49,9 @@ const uint8_t
 
 	With 130:10 / 13:1 gear ratio and 2 micro steps = 5200
 	With 120:12 and 2 micro steps = 4800
+	With 120:20 and 2 micro steps = 2400
 */
-#define DRIVER_MICROSTEPS 0					  // to disable microsteps change this to 0
+#define DRIVER_MICROSTEPS 2					  // to disable microsteps change this to 0
 #define STEPS_PER_REVOLUTION 2400			  // used by the centering function
 #define STEPS_LIMIT STEPS_PER_REVOLUTION * .2 // How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
 
@@ -67,16 +68,17 @@ TFLI2C tflI2C;
 struct SETTINGS_S
 {
 	int DRIVER_MAX_SPEED = STEPS_PER_REVOLUTION / 4; // in steps per second
-	int DRIVER_MAX_ACC = STEPS_PER_REVOLUTION / 4;
-	int DRIVER_CURRENT = 1000;	  // in mA?
-	int DISPLAY_BRIGHTNESS = 100; // 0-255
-	int SENSOR_UPDATE_TIME = 25;  // in ms, how often to read data from the gyro
-	int STEPS_LIMIT_ALLOWED = STEPS_LIMIT;
-	int MOVE_THRESHOLD = 2;					 // how many steps off "correct" position before is starts moving
-	int MOVE_THRESHOLD_CENTER = 5;			 // how many steps off center before it starts moving
-	char STARTUP_MODE = -1;					 // what should be the mode after first start, -1 default, 0 or 1 will call calibration function
-	float VOLTAGE_WEIGHTING_PARAMETER = 0.1; // to filter voltage readings
-	float SENSOR_WEIGHTING_PARAMETER = 0.1;	 // to filter LUNA readings
+	int DRIVER_MAX_ACC = STEPS_PER_REVOLUTION / 4;	 // in steps per second
+	int DRIVER_CURRENT = 1000;						 // in mA?
+	int DISPLAY_BRIGHTNESS = 100;					 // 0-255
+	int SENSOR_UPDATE_TIME = 25;					 // in ms, how often to read data from the lunas
+	int STEPS_LIMIT_ALLOWED = STEPS_LIMIT;			 // STEPS_LIMIT sets how many steps are allowed by hardware (physical stop), this limits it further
+	int MOVE_THRESHOLD = 2;							 // how many steps off "correct" position before is starts moving
+	int MOVE_THRESHOLD_CENTER = 5;					 // how many steps off center before it starts moving
+	int SPEED_THRESHOLD = 200;						 // if current speed above this # of steps, don't read lunas to prevent skipping the steps
+	char STARTUP_MODE = -1;							 // what should be the mode after first start, -1 default, 0 or 1 will call calibration function
+	float VOLTAGE_WEIGHTING_PARAMETER = 0.1;		 // to filter voltage readings
+	float SENSOR_WEIGHTING_PARAMETER = 0.1;			 // to filter LUNA readings
 } const DEFAULT_SETTINGS;
 
 SETTINGS_S SETTINGS = DEFAULT_SETTINGS;
@@ -455,6 +457,13 @@ void setup()
 
 	Wire.begin();
 
+	lcd.init();
+	lcd.noBacklight(); // as brightness is controlled by arduino, LCD is modified to allow that
+	analogWrite(LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS);
+	lcd.clear();
+	lcd.setCursor(0, 0);
+	lcd.print(F("Starting..."));
+
 	digitalWrite(DRIVER_ENABLE, HIGH);
 	pinMode(DRIVER_ENABLE, OUTPUT);
 	pinMode(DRIVER_DIRECTION, OUTPUT);
@@ -473,16 +482,12 @@ void setup()
 	TMCdriver.rms_current(SETTINGS.DRIVER_CURRENT);
 	TMCdriver.pwm_autoscale(1);
 	TMCdriver.microsteps(DRIVER_MICROSTEPS);
+
 	stepper.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED);
 	stepper.setAcceleration(SETTINGS.DRIVER_MAX_ACC);
 	stepper.setEnablePin(DRIVER_ENABLE);
 	stepper.setPinsInverted(false, false, true);
 	stepper.disableOutputs();
-
-	lcd.init();
-	lcd.noBacklight(); // as brightness is controlled by arduino, LCD is modified to allow that
-	analogWrite(LCD_BRIGHTNESS, SETTINGS.DISPLAY_BRIGHTNESS);
-	lcd.clear();
 
 	if (SETTINGS.STARTUP_MODE != -1)
 	{
@@ -572,7 +577,7 @@ int menuInner(int startValue, int min, int max, int y, int multiplier = 1)
 void menu_motorDriver()
 {
 	int menuCurrentItem = 0;
-	const int menuItemsCount = 5; // increase when adding menu options
+	const int menuItemsCount = 6; // increase when adding menu options
 	bool displayUpdate = true;
 
 	while (1)
@@ -604,6 +609,13 @@ void menu_motorDriver()
 				lcd.print(F("Center thr."));
 				lcd.setCursor(3, 1);
 				lcd.print(F("Steps limit"));
+			}
+			// 6
+			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
+			{
+				lcd.print(F("Sens step limit"));
+				// lcd.setCursor(3, 1);
+				// lcd.print(F(""));
 			}
 
 			// print selection arrow
@@ -674,6 +686,12 @@ void menu_motorDriver()
 				SETTINGS.STEPS_LIMIT_ALLOWED = menuInner(SETTINGS.STEPS_LIMIT_ALLOWED, 0, STEPS_LIMIT, 1);
 				continue;
 			}
+			else if (menuCurrentItem == 6)
+			{
+				lcd.print(F("Speed sens thr"));
+				SETTINGS.SPEED_THRESHOLD = menuInner(SETTINGS.SPEED_THRESHOLD, 10, SETTINGS.DRIVER_MAX_SPEED, 10);
+				continue;
+			}
 		}
 	}
 }
@@ -712,7 +730,7 @@ float getBikeAngle(uint16_t rawDistance)
 void menu_sensor()
 {
 	int menuCurrentItem = 0;
-	const int menuItemsCount = 1; // increase when adding menu options
+	const int menuItemsCount = 3; // increase when adding menu options
 	bool displayUpdate = true;
 
 	while (1)
@@ -730,6 +748,12 @@ void menu_sensor()
 				lcd.print(F("Raw distance"));
 				lcd.setCursor(3, 1);
 				lcd.print(F("Update freq."));
+			}
+			else if (menuCurrentItem == counter++ || menuCurrentItem == counter++)
+			{
+				lcd.print(F("V weight param"));
+				lcd.setCursor(3, 1);
+				lcd.print(F("Luna w. param"));
 			}
 
 			// print selection arrow
@@ -788,6 +812,18 @@ void menu_sensor()
 			{
 				lcd.print(F("Update delay"));
 				SETTINGS.SENSOR_UPDATE_TIME = menuInner(SETTINGS.SENSOR_UPDATE_TIME, 0, 500, 1, 1);
+				continue;
+			}
+			else if (menuCurrentItem == 2)
+			{
+				lcd.print(F("V weight param"));
+				SETTINGS.VOLTAGE_WEIGHTING_PARAMETER = menuInner(SETTINGS.VOLTAGE_WEIGHTING_PARAMETER * 100, 0, 100, 1, 1) / 100;
+				continue;
+			}
+			else if (menuCurrentItem == 3)
+			{
+				lcd.print(F("Luna w. param"));
+				SETTINGS.SENSOR_WEIGHTING_PARAMETER = menuInner(SETTINGS.SENSOR_WEIGHTING_PARAMETER * 100, 0, 100, 1, 1) / 100;
 				continue;
 			}
 		}
@@ -1091,7 +1127,12 @@ void loop()
 	do
 	{
 		stepper.run();
-	} while (abs(stepper.speed()) > 300);
+	} while (abs(stepper.speed()) > SETTINGS.SPEED_THRESHOLD);
+	/*
+		Todo:
+		- this "300" value, make it a setting
+		- migrate settings menu from 5160 branch
+	*/
 
 	/*
 		Update the sensors.
