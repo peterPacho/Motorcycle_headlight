@@ -703,8 +703,8 @@ float getBikeAngle(uint16_t rawDistance)
 
 	// got this function by measuring angle and the readout and doing the
 	// best function fit in Logger Pro
-	rawDistance = 38.43 * sin(0.01974 * rawDistance + 6.271) + 0.4739;
-	lastAngle = rawDistance * SETTINGS.SENSOR_WEIGHTING_PARAMETER + lastAngle * (1 - SETTINGS.SENSOR_WEIGHTING_PARAMETER);
+	float dist = 38.43 * sin(0.01974 * rawDistance + 6.271) + 0.4739;
+	lastAngle = dist * SETTINGS.SENSOR_WEIGHTING_PARAMETER + lastAngle * (1 - SETTINGS.SENSOR_WEIGHTING_PARAMETER);
 
 	return lastAngle;
 }
@@ -1086,14 +1086,12 @@ void loop()
 	bool lunaReadingResult = false;
 
 	/*
-		Reading one luna takes ~3ms, so it should reliably make up to
-		~330 steps before reading the lunas will take too long and might
-		cause step skipping. So if above that speed, ignore sensors for now.
+
 	*/
 	do
 	{
 		stepper.run();
-	} while (abs(stepper.speed()) > 330);
+	} while (abs(stepper.speed()) > 300);
 
 	/*
 		Update the sensors.
