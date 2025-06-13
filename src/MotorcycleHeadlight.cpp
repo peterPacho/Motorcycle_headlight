@@ -13,23 +13,24 @@
 	Comment out if uploading the sketch for the first time so
 	it writes default settings to the Arduino's eeprom
 */
-// #define RESTORE_DEFAULT_SETTINGS
+#define RESTORE_DEFAULT_SETTINGS
 
 /*
 	Arduino pin-out. SDA (white wire) - A4, SCL (yellow/green wire) - A5
 */
 #define DRIVER_ENABLE 9
 #define DRIVER_DIRECTION 10
-#define DRIVER_STEP 3
-#define DRIVER_SWCLCK 4
-#define DRIVER_TX 6 // TX and RX must be swapped around
-#define DRIVER_RX 5
-#define HALL_SENSOR 12 // sensor that detects the center position of the headlight
+#define DRIVER_STEP 13
+#define DRIVER_SWCLCK 11
+#define DRIVER_TX 12 // TX and RX must be swapped around
+#define DRIVER_RX 6
+
+#define HALL_SENSOR 4 // sensor that detects the center position of the headlight
 #define BUTTON1 7
 #define BUTTON2 8
 #define BUTTON3 A1
 #define BUTTON4 A2
-#define LCD_BRIGHTNESS 11	// must be a PWM pin, used to set custom LCD brightness that extends the build-in on/off
+#define LCD_BRIGHTNESS 3	// must be a PWM pin, used to set custom LCD brightness that extends the build-in on/off
 #define VOLTAGE_SENSE A0	// connected to voltage divider and 12V input
 #define LUNA_ENABLE_RELAY 2 // pin that disables one of Luna modules so the address of the other one can be changed
 #define DRIVER_ADDRESS 0b00
