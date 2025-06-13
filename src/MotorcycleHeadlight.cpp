@@ -1068,16 +1068,6 @@ void menu_main()
 */
 void loop()
 {
-	/*
-		Reading one luna takes ~3ms, so it should reliably make up to
-		~330 steps before reading the lunas will take too long and might
-		cause step skipping. So if above that speed, ignore sensors for now.
-	*/
-	do
-	{
-		stepper.run();
-	} while (abs(stepper.speed()) > 330);
-
 #ifdef DEBUG_ON
 	serialCommands();
 	static unsigned long lastLogEvent = 0;
@@ -1092,20 +1082,45 @@ void loop()
 
 	static float bikeLeanAngle = 0;
 	static int previousTarget = 0; // what was the target stepper position
+	int16_t lunaDist1 = 0, lunaDist2 = 0;
+	bool lunaReadingResult = false;
+
+	/*
+		Reading one luna takes ~3ms, so it should reliably make up to
+		~330 steps before reading the lunas will take too long and might
+		cause step skipping. So if above that speed, ignore sensors for now.
+	*/
+	do
+	{
+		stepper.run();
+	} while (abs(stepper.speed()) > 330);
 
 	/*
 		Update the sensors.
+		Reading one sensor at the time.
 	*/
 	static unsigned long lastSensorUpdate = 0;
-	if (millis() - lastSensorUpdate > (unsigned long)SETTINGS.SENSOR_UPDATE_TIME)
+	bool updateLunas = millis() - lastSensorUpdate > (unsigned long)SETTINGS.SENSOR_UPDATE_TIME;
+	if (updateLunas)
 	{
-		int16_t tfDist1 = 0, tfDist2 = 0;
-		tflI2C.getData(tfDist1, LUNA_ADDRESS_1);
-		tflI2C.getData(tfDist2, LUNA_ADDRESS_2);
+		lunaReadingResult = tflI2C.getData(lunaDist1, LUNA_ADDRESS_1);
+	}
 
-		bikeLeanAngle = getBikeAngle(tfDist1 - tfDist2);
+	stepper.run();
 
-		lastSensorUpdate = millis();
+	/*
+		Reading second luna
+	*/
+	if (updateLunas)
+	{
+		lunaReadingResult = lunaReadingResult && tflI2C.getData(lunaDist2, LUNA_ADDRESS_2);
+
+		if (lunaReadingResult)
+		{
+			bikeLeanAngle = getBikeAngle(lunaDist1 - lunaDist2);
+
+			lastSensorUpdate = millis();
+		}
 	}
 
 	/*
