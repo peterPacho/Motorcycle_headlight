@@ -683,17 +683,13 @@ void menu_motorDriver()
 	Distance returned as reference parameters.
 	If distance measurement was successful returns true.
 */
-bool getRawDistance(float &distance)
+float getRawDistance()
 {
 	int16_t tfDist1 = 0, tfDist2 = 0;
-	bool result = tflI2C.getData(tfDist1, LUNA_ADDRESS_1) && tflI2C.getData(tfDist2, LUNA_ADDRESS_2);
+	tflI2C.getData(tfDist1, LUNA_ADDRESS_1);
+	tflI2C.getData(tfDist2, LUNA_ADDRESS_2);
 
-	if (result)
-	{
-		distance = tfDist1 - tfDist2;
-	}
-
-	return result;
+	return tfDist1 - tfDist2;
 }
 
 /*
@@ -701,23 +697,16 @@ bool getRawDistance(float &distance)
 	Returns true if angle reading was successful.
 	Returns the angle by the reference parameter.
 */
-bool getBikeAngle(float &angle)
+float getBikeAngle(float rawDistance)
 {
 	static float lastAngle = 0;
-	float tempAngle = 0;
 
-	if (getRawDistance(tempAngle))
-	{
-		// got this function by measuring angle and the readout and doing the
-		// best function fit in Logger Pro
-		tempAngle = 38.43 * sin(0.01974 * tempAngle + 6.271) + 0.4739;
-		lastAngle = tempAngle * SETTINGS.SENSOR_WEIGHTING_PARAMETER + lastAngle * (1 - SETTINGS.SENSOR_WEIGHTING_PARAMETER);
-		angle = lastAngle;
+	// got this function by measuring angle and the readout and doing the
+	// best function fit in Logger Pro
+	rawDistance = 38.43 * sin(0.01974 * rawDistance + 6.271) + 0.4739;
+	lastAngle = rawDistance * SETTINGS.SENSOR_WEIGHTING_PARAMETER + lastAngle * (1 - SETTINGS.SENSOR_WEIGHTING_PARAMETER);
 
-		return 1;
-	}
-
-	return 0;
+	return lastAngle;
 }
 
 void menu_sensor()
@@ -786,9 +775,7 @@ void menu_sensor()
 						lcd.setCursor(0, 1);
 						lcd.print(F("          "));
 						lcd.setCursor(0, 1);
-						float dist = 0;
-						if (getRawDistance(dist))
-							lcd.print(dist);
+						lcd.print(getRawDistance());
 
 						lastUpd = millis();
 					}
@@ -1112,11 +1099,8 @@ void loop()
 	static unsigned long lastSensorUpdate = 0;
 	if (millis() - lastSensorUpdate > (unsigned long)SETTINGS.SENSOR_UPDATE_TIME)
 	{
-		float angle = 0;
-		if (getBikeAngle(angle))
-		{
-			bikeLeanAngle = angle;
-		}
+		bikeLeanAngle = getBikeAngle(getRawDistance());
+
 		lastSensorUpdate = millis();
 	}
 
