@@ -701,15 +701,23 @@ bool getRawDistance(float &distance)
 	Returns true if angle reading was successful.
 	Returns the angle by the reference parameter.
 */
-float getBikeAngle(uint16_t lunaDiff)
+bool getBikeAngle(float &angle)
 {
 	static float lastAngle = 0;
+	float tempAngle = 0;
 
-	// got this function by measuring angle and the readout and doing the
-	// best function fit in Logger Pro
-	lunaDiff = 38.43 * sin(0.01974 * lunaDiff + 6.271) + 0.4739;
-	lastAngle = lunaDiff * SETTINGS.SENSOR_WEIGHTING_PARAMETER + lastAngle * (1 - SETTINGS.SENSOR_WEIGHTING_PARAMETER);
-	return lastAngle;
+	if (getRawDistance(tempAngle))
+	{
+		// got this function by measuring angle and the readout and doing the
+		// best function fit in Logger Pro
+		tempAngle = 38.43 * sin(0.01974 * tempAngle + 6.271) + 0.4739;
+		lastAngle = tempAngle * SETTINGS.SENSOR_WEIGHTING_PARAMETER + lastAngle * (1 - SETTINGS.SENSOR_WEIGHTING_PARAMETER);
+		angle = lastAngle;
+
+		return 1;
+	}
+
+	return 0;
 }
 
 void menu_sensor()
@@ -1104,15 +1112,11 @@ void loop()
 	static unsigned long lastSensorUpdate = 0;
 	if (millis() - lastSensorUpdate > (unsigned long)SETTINGS.SENSOR_UPDATE_TIME)
 	{
-		int16_t tfDist1 = 0, tfDist2 = 0;
-		bool result = tflI2C.getData(tfDist1, LUNA_ADDRESS_1) && tflI2C.getData(tfDist2, LUNA_ADDRESS_2);
-
-		if (result)
+		float angle = 0;
+		if (getBikeAngle(angle))
 		{
-			tfDist1 = tfDist1 - tfDist2;
-			bikeLeanAngle = getBikeAngle(tfDist1);
+			bikeLeanAngle = angle;
 		}
-
 		lastSensorUpdate = millis();
 	}
 
