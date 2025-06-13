@@ -7,13 +7,13 @@
 #include <TFLI2C.h> // https://github.com/budryerson/TFLuna-I2C
 
 // comment out to disable log/debug/serial commands and reduce sketch size
-// #define DEBUG_ON
+#define DEBUG_ON
 
 /*
 	Comment out if uploading the sketch for the first time so
 	it writes default settings to the Arduino's eeprom
 */
-#define RESTORE_DEFAULT_SETTINGS
+// #define RESTORE_DEFAULT_SETTINGS
 
 /*
 	Arduino pin-out. SDA (white wire) - A4, SCL (yellow/green wire) - A5
@@ -22,8 +22,8 @@
 #define DRIVER_DIRECTION 10
 #define DRIVER_STEP 13
 #define DRIVER_SWCLCK 11
-#define DRIVER_TX 12 // TX and RX must be swapped around
-#define DRIVER_RX 6
+#define DRIVER_TX 6 // TX and RX must be swapped around
+#define DRIVER_RX 12
 
 #define HALL_SENSOR 4 // sensor that detects the center position of the headlight
 #define BUTTON1 7
@@ -40,13 +40,6 @@
 #define LUNA_ADDRESS_2 0x11 // luna that is not connected through relay will have address changed to this value
 
 /*
-	Speeds to use for calibration function.
-	Calibration function doesn't use deceleration right now so keep max speed low.
-*/
-#define DRIVER_MAX_SPEED_CALIBRATION 500
-#define DRIVER_MAX_ACC_CALIBRATION 1000
-
-/*
 	With 72:8 gear ratio (9:1),
 	stepper motor having 1.8 degrees per step
 	and microsteps set to 16
@@ -55,9 +48,16 @@
 	With 130:10 / 13:1 gear ratio and 2 micro steps = 5200
 	With 120:12 and 2 micro steps = 4800
 */
-#define DRIVER_MICROSTEPS 2						  // to disable microsteps change this to 0
-#define STEPS_PER_REVOLUTION 4800				  // used by the centering function
-#define STEPS_LIMIT STEPS_PER_REVOLUTION / 2 - 10 // How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
+#define DRIVER_MICROSTEPS 0					  // to disable microsteps change this to 0
+#define STEPS_PER_REVOLUTION 2400			  // used by the centering function
+#define STEPS_LIMIT STEPS_PER_REVOLUTION * .2 // How many steps it takes to reach end of travel from the center. Limits the headlight's maximum angle.
+
+/*
+	Speeds to use for calibration function.
+	Calibration function doesn't use deceleration right now so keep max speed low.
+*/
+#define DRIVER_MAX_SPEED_CALIBRATION STEPS_PER_REVOLUTION / 10
+#define DRIVER_MAX_ACC_CALIBRATION STEPS_PER_REVOLUTION / 10
 
 SoftwareSerial SoftSerial(DRIVER_RX, DRIVER_TX);
 TMC2209Stepper TMCdriver(&SoftSerial, DRIVER_RSENSE, DRIVER_ADDRESS);
@@ -199,6 +199,111 @@ button buttonUp(BUTTON3);
 button buttonDown(BUTTON1);
 button buttonESC(BUTTON2);
 
+/*
+	Finds the center / calibrates the stepper using the hall sensor.
+*/
+void calibratePosition()
+{
+	// setup
+	int direction = 1;
+	lcd.clear();
+	lcd.setCursor(0, 0);
+	lcd.print(F("Calibrating"));
+	lcd.setCursor(4, 1);
+	lcd.print(F("position..."));
+	if (digitalRead(DRIVER_ENABLE))
+	{
+		stepper.enableOutputs();
+		delay(300);
+	}
+	stepper.setMaxSpeed(DRIVER_MAX_SPEED_CALIBRATION);
+	stepper.setAcceleration(DRIVER_MAX_ACC_CALIBRATION);
+
+	// if already calibrated before, move to 0 to reduce time
+	// if just started or already on 0 this function returns 0
+	if (stepper.currentPosition())
+	{
+		stepper.moveTo(0);
+		while (stepper.distanceToGo())
+			stepper.run();
+		// if moved to 0 but still didn't reach HALL (due to some missed steps??) go a bit further
+		if (digitalRead(HALL_SENSOR))
+			stepper.moveTo(STEPS_PER_REVOLUTION * 0.04);
+		while (stepper.distanceToGo())
+			stepper.run();
+	}
+
+	// arbitrary multiplier - want to move not more than less than 45 degrees
+	stepper.move(-STEPS_PER_REVOLUTION * 0.25);
+
+	while (stepper.distanceToGo() != 0 && digitalRead(HALL_SENSOR))
+	{
+		stepper.run();
+	}
+
+	stepper.setCurrentPosition(0);
+
+	//	if hall still reads high, we must be past it (and stalled on the end stop), so rotate back to the middle
+	if (digitalRead(HALL_SENSOR))
+	{
+		direction = -1; // set so next steps of finding the center accelerate in the same direction
+
+		stepper.move(STEPS_PER_REVOLUTION * 0.3);
+
+		while (stepper.distanceToGo() != 0 && digitalRead(HALL_SENSOR))
+		{
+			stepper.run();
+		}
+	}
+
+	stepper.setCurrentPosition(0);
+
+	// at this point we more or less should be in the middle
+	// hall should read 0
+	// so do small steps to actually find the middle
+	stepper.setMaxSpeed(DRIVER_MAX_SPEED_CALIBRATION / 4);
+	stepper.setAcceleration(DRIVER_MAX_ACC_CALIBRATION / 2);
+
+	// again arbitrary multiplier - too small and we don't reach other side of the magnet
+	stepper.move(-STEPS_PER_REVOLUTION * 0.04 * direction);
+
+	while (stepper.distanceToGo() != 0 && !digitalRead(HALL_SENSOR))
+	{
+		stepper.run();
+	}
+
+	// reached some point where hall no longer reads 0
+	// reset position to 0
+	// move in other direction until hall reads 0 and then reads 1 again
+
+	stepper.setCurrentPosition(0);
+	stepper.move(STEPS_PER_REVOLUTION * 0.04 * direction);
+
+	while (stepper.distanceToGo() != 0 && digitalRead(HALL_SENSOR))
+	{
+		stepper.run();
+	}
+	while (stepper.distanceToGo() != 0 && !digitalRead(HALL_SENSOR))
+	{
+		stepper.run();
+	}
+
+	// go back to the previous settings
+	stepper.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED);
+	stepper.setAcceleration(SETTINGS.DRIVER_MAX_ACC);
+
+	// now reached other side of the hall range, so actual middle position is somewhere in between
+	stepper.moveTo(stepper.currentPosition() / 2);
+
+	while (stepper.distanceToGo() != 0)
+		stepper.run();
+
+	// now we are in the actual middle position
+	stepper.setCurrentPosition(0);
+
+	lcd.clear();
+}
+
 #ifdef DEBUG_ON
 /*
 	Taken from https://learn.adafruit.com/scanning-i2c-addresses/arduino
@@ -310,111 +415,6 @@ void serialCommands()
 }
 
 #endif
-
-/*
-	Finds the center / calibrates the stepper using the hall sensor.
-*/
-void calibratePosition()
-{
-	// setup
-	int direction = 1;
-	lcd.clear();
-	lcd.setCursor(0, 0);
-	lcd.print(F("Calibrating"));
-	lcd.setCursor(4, 1);
-	lcd.print(F("position..."));
-	if (digitalRead(DRIVER_ENABLE))
-	{
-		stepper.enableOutputs();
-		delay(300);
-	}
-	stepper.setMaxSpeed(DRIVER_MAX_SPEED_CALIBRATION);
-	stepper.setAcceleration(DRIVER_MAX_ACC_CALIBRATION);
-
-	// if already calibrated before, move to 0 to reduce time
-	// if just started or already on 0 this function returns 0
-	if (stepper.currentPosition())
-	{
-		stepper.moveTo(0);
-		while (stepper.distanceToGo())
-			stepper.run();
-		// if moved to 0 but still didn't reach HALL (due to some missed steps??) go a bit further
-		if (digitalRead(HALL_SENSOR))
-			stepper.moveTo(STEPS_PER_REVOLUTION * 0.04);
-		while (stepper.distanceToGo())
-			stepper.run();
-	}
-
-	// arbitrary multiplier - want to move not more than less than 45 degrees
-	stepper.move(-STEPS_PER_REVOLUTION * 0.25);
-
-	while (stepper.distanceToGo() != 0 && digitalRead(HALL_SENSOR))
-	{
-		stepper.run();
-	}
-
-	stepper.setCurrentPosition(0);
-
-	//	if hall still reads high, we must be past it (and stalled on the end stop), so rotate back to the middle
-	if (digitalRead(HALL_SENSOR))
-	{
-		direction = -1; // set so next steps of finding the center accelerate in the same direction
-
-		stepper.move(STEPS_PER_REVOLUTION * 0.3);
-
-		while (stepper.distanceToGo() != 0 && digitalRead(HALL_SENSOR))
-		{
-			stepper.run();
-		}
-	}
-
-	stepper.setCurrentPosition(0);
-
-	// at this point we more or less should be in the middle
-	// hall should read 0
-	// so do small steps to actually find the middle
-	stepper.setMaxSpeed(DRIVER_MAX_SPEED_CALIBRATION / 4);
-	stepper.setAcceleration(DRIVER_MAX_ACC_CALIBRATION / 2);
-
-	// again arbitrary multiplier - too small and we don't reach other side of the magnet
-	stepper.move(-STEPS_PER_REVOLUTION * 0.04 * direction);
-
-	while (stepper.distanceToGo() != 0 && !digitalRead(HALL_SENSOR))
-	{
-		stepper.run();
-	}
-
-	// reached some point where hall no longer reads 0
-	// reset position to 0
-	// move in other direction until hall reads 0 and then reads 1 again
-
-	stepper.setCurrentPosition(0);
-	stepper.move(STEPS_PER_REVOLUTION * 0.04 * direction);
-
-	while (stepper.distanceToGo() != 0 && digitalRead(HALL_SENSOR))
-	{
-		stepper.run();
-	}
-	while (stepper.distanceToGo() != 0 && !digitalRead(HALL_SENSOR))
-	{
-		stepper.run();
-	}
-
-	// go back to the previous settings
-	stepper.setMaxSpeed(SETTINGS.DRIVER_MAX_SPEED);
-	stepper.setAcceleration(SETTINGS.DRIVER_MAX_ACC);
-
-	// now reached other side of the hall range, so actual middle position is somewhere in between
-	stepper.moveTo(stepper.currentPosition() / 2);
-
-	while (stepper.distanceToGo() != 0)
-		stepper.run();
-
-	// now we are in the actual middle position
-	stepper.setCurrentPosition(0);
-
-	lcd.clear();
-}
 
 /*
 	Those values were obtained by gathering data on different voltage levels and doing
@@ -822,7 +822,7 @@ void menu_test()
 	lcd.clear();
 	lcd.setCursor(0, 0);
 	lcd.print(F("Press OK to test"));
-	int sweepSteps = STEPS_LIMIT;
+	int sweepSteps = SETTINGS.STEPS_LIMIT_ALLOWED;
 	int sweepStepsDisp = -1;
 
 	while (1)
@@ -1085,6 +1085,26 @@ void menu_main()
 */
 void loop()
 {
+	/*
+
+	*/
+	do
+	{
+		stepper.run();
+	} while (abs(stepper.speed()) > 166);
+
+#ifdef DEBUG_ON
+	serialCommands();
+	static unsigned long lastLogEvent = 0;
+	if (millis() - lastLogEvent > 500)
+	{
+		Serial.println(stepper.speed());
+
+		lastLogEvent = millis();
+	}
+
+#endif
+
 	static float bikeLeanAngle = 0;
 	static int previousTarget = 0; // what was the target stepper position
 
@@ -1129,7 +1149,12 @@ void loop()
 		}
 	}
 
-	stepper.run();
+	// if stepper not in target position don't run rest of the function.
+	// less important parts after this step
+	if (stepper.distanceToGo())
+	{
+		return;
+	}
 
 	/*
 		Check for user input.
@@ -1171,13 +1196,6 @@ void loop()
 			mode = 0;
 
 		break;
-	}
-
-	// if stepper not in target position don't run rest of the function.
-	// less important parts after this step
-	if (stepper.distanceToGo())
-	{
-		return;
 	}
 
 	if (buttonESC.state())
@@ -1253,15 +1271,4 @@ void loop()
 
 		lastDisplayUpdate = millis();
 	}
-
-#ifdef DEBUG_ON
-	serialCommands();
-	static unsigned long lastLogEvent = 0;
-	if (millis() - lastLogEvent > 500)
-	{
-
-		lastLogEvent = millis();
-	}
-
-#endif
 }
