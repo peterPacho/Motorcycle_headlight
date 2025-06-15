@@ -701,7 +701,7 @@ void menu_motorDriver()
 	Distance returned as reference parameters.
 	If distance measurement was successful returns true.
 */
-uint16_t getRawDistance()
+int16_t getRawDistance()
 {
 	int16_t tfDist1 = 0, tfDist2 = 0;
 	tflI2C.getData(tfDist1, LUNA_ADDRESS_1);
@@ -715,7 +715,7 @@ uint16_t getRawDistance()
 	Returns true if angle reading was successful.
 	Returns the angle by the reference parameter.
 */
-float getBikeAngle(uint16_t rawDistance)
+float getBikeAngle(int16_t rawDistance)
 {
 	static float lastAngle = 0;
 
